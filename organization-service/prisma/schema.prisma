@@ -1,0 +1,453 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model org_roles {
+  id              String        @id @db.VarChar(36)
+  organization_id String        @db.VarChar(36)
+  name            String        @db.VarChar(100)
+  description     String?       @db.Text
+  is_default      Boolean       @default(false)
+  is_active       Boolean       @default(true)
+  created_at      DateTime      @default(now())
+  updated_at      DateTime
+  organizations   organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  org_users       org_users[]
+  role_permissions role_permissions[] 
+
+  @@unique([organization_id, name])
+  @@index([organization_id])
+}
+
+/// Role Permissions (links roles to Identity Service permission IDs)
+model role_permissions {
+  id            String    @id @db.VarChar(36)
+  role_id       String    @db.VarChar(36)
+  permission_id String    @db.VarChar(36) 
+  
+  created_at    DateTime  @default(now())
+  
+  role          org_roles @relation(fields: [role_id], references: [id], onDelete: Cascade)
+  
+  @@unique([role_id, permission_id])
+  @@index([role_id])
+  @@index([permission_id])
+}
+
+model org_subscriptions {
+  id                 String                   @id @db.VarChar(36)
+  organization_id    String                   @db.VarChar(36)
+  plan_id            String                   @db.VarChar(36)
+  status             org_subscriptions_status @default(ACTIVE)
+  start_date         DateTime
+  end_date           DateTime
+  trial_ends_at      DateTime?
+  auto_renew         Boolean                  @default(true)
+  custom_limits      String?                  @db.LongText
+  last_payment_at    DateTime?
+  created_at         DateTime                 @default(now())
+  updated_at         DateTime
+  organizations      organizations            @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  subscription_plans subscription_plans       @relation(fields: [plan_id], references: [id])
+  subscription_usage subscription_usage[]
+
+  @@index([organization_id])
+  @@index([plan_id])
+  @@index([status])
+}
+
+model org_users {
+  id                 String        @id @db.VarChar(36)
+  organization_id    String        @db.VarChar(36)
+  user_id            String        @db.VarChar(36)
+  role_id            String?       @db.VarChar(36)
+  custom_permissions String?       @db.LongText
+  invited_by         String?       @db.VarChar(36)
+  joined_at          DateTime      @default(now())
+  is_active          Boolean       @default(true)
+  created_at         DateTime      @default(now())
+  updated_at         DateTime
+  organizations      organizations @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  org_roles          org_roles?    @relation(fields: [role_id], references: [id])
+
+  @@unique([organization_id, user_id])
+  @@index([organization_id])
+  @@index([role_id])
+  @@index([user_id])
+}
+
+model organizations {
+  id                String               @id @db.VarChar(36)
+  name              String               @db.VarChar(255)
+  slug              String               @unique @db.VarChar(100)
+  order_prefix      String?              @unique @db.VarChar(10)
+  owner_user_id     String               @db.VarChar(36)
+  email             String?              @db.VarChar(255)
+  phone             String?              @db.VarChar(15)
+  website           String?              @db.VarChar(500)
+  address           String?              @db.Text
+  city              String?              @db.VarChar(100)
+  state             String?              @db.VarChar(100)
+  country           String               @default("India") @db.VarChar(100)
+  pincode           String?              @db.VarChar(10)
+  gstin             String?              @db.VarChar(15)
+  pan               String?              @db.VarChar(10)
+  api_key           String?              @unique @db.VarChar(64)
+  webhook_url       String?              @db.VarChar(500)
+  status            organizations_status @default(ACTIVE)
+  is_active         Boolean              @default(true)
+  settings          String?              @db.LongText
+  created_at        DateTime             @default(now())
+  updated_at        DateTime
+  org_roles         org_roles[]
+  org_subscriptions org_subscriptions[]
+  org_users         org_users[]
+  support_tickets   support_tickets[]
+
+  @@index([is_active])
+  @@index([owner_user_id])
+  @@index([slug])
+  @@index([api_key])
+}
+
+model subscription_plans {
+  id                String                           @id @db.VarChar(36)
+  name              String                           @db.VarChar(100)
+  code              String                           @unique @db.VarChar(50)
+  description       String?                          @db.Text
+  price             Decimal                          @db.Decimal(10, 2)
+  billing_cycle     subscription_plans_billing_cycle @default(MONTHLY)
+  trial_days        Int                              @default(0)
+  max_users         Int                              @default(5)
+  max_merchants     Int                              @default(3)
+  max_transactions  Int                              @default(1000)
+  is_active         Boolean                          @default(true)
+  created_at        DateTime                         @default(now())
+  updated_at        DateTime
+  org_subscriptions org_subscriptions[]
+
+  @@index([code])
+  @@index([is_active])
+}
+
+model subscription_usage {
+  id                 String            @id @db.VarChar(36)
+  subscription_id    String            @db.VarChar(36)
+  year               Int
+  month              Int
+  users_created      Int               @default(0)
+  merchants_created  Int               @default(0)
+  transactions_count Int               @default(0)
+  transaction_volume Decimal           @default(0.00) @db.Decimal(18, 2)
+  api_calls_count    Int               @default(0)
+  created_at         DateTime          @default(now())
+  updated_at         DateTime
+  org_subscriptions  org_subscriptions @relation(fields: [subscription_id], references: [id], onDelete: Cascade)
+
+  @@unique([subscription_id, year, month])
+  @@index([subscription_id])
+}
+
+model support_tickets {
+  id              String                  @id @db.VarChar(36)
+  organization_id String                  @db.VarChar(36)
+  created_by      String                  @db.VarChar(36)
+  subject         String                  @db.VarChar(500)
+  message         String                  @db.Text
+  status          support_tickets_status  @default(OPEN)
+  priority        support_tickets_priority @default(MEDIUM)
+  category        support_tickets_category @default(GENERAL)
+  assigned_to     String?                 @db.VarChar(36)
+  created_at      DateTime                @default(now())
+  updated_at      DateTime                @updatedAt
+  organizations   organizations           @relation(fields: [organization_id], references: [id], onDelete: Cascade)
+  support_replies support_replies[]
+
+  @@index([organization_id])
+  @@index([status])
+  @@index([priority])
+  @@index([created_by])
+}
+
+model support_replies {
+  id              String          @id @db.VarChar(36)
+  ticket_id       String          @db.VarChar(36)
+  message         String          @db.Text
+  created_by      String          @db.VarChar(36)
+  is_admin        Boolean         @default(false)
+  created_at      DateTime        @default(now())
+  support_tickets support_tickets @relation(fields: [ticket_id], references: [id], onDelete: Cascade)
+
+  @@index([ticket_id])
+  @@index([created_by])
+}
+
+model audit_logs {
+  id                 String    @id @db.VarChar(36)
+  organization_id    String?   @db.VarChar(36)
+  action             String    @db.VarChar(100)
+  performed_by       String    @db.VarChar(36)
+  performed_by_type  String    @default("SUPER_ADMIN") @db.VarChar(50)
+  entity_id          String?   @db.VarChar(36)
+  entity_type        String?   @db.VarChar(100)
+  metadata           String?   @db.LongText
+  reason             String?   @db.Text
+  ip_address         String?   @db.VarChar(45)
+  created_at         DateTime  @default(now())
+
+  @@index([organization_id])
+  @@index([action])
+  @@index([performed_by])
+  @@index([created_at])
+}
+
+
+enum support_tickets_status {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum support_tickets_priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum support_tickets_category {
+  GENERAL
+  TECHNICAL
+  BILLING
+  FEATURE_REQUEST
+}
+
+enum org_subscriptions_status {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+  SUSPENDED
+}
+
+enum subscription_plans_billing_cycle {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum organizations_status {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+model PlatformConfig {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  key       String   @unique @db.VarChar(100)
+  value     String   @db.LongText
+  group     String?  @db.VarChar(50) // e.g., 'support', 'billing'
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_configs")
+}
+
+// -----------------------------------------
+// CONTENT MANAGEMENT & CMS MODELS
+// -----------------------------------------
+
+model CmsPage {
+  id             String       @id @default(uuid()) @db.VarChar(36)
+  title          String       @db.VarChar(255)
+  slug           String       @unique @db.VarChar(255)
+  url            String?      @db.VarChar(500)
+  content        String       @db.LongText
+  status         String       @default("draft") @db.VarChar(20) // draft, published
+  locale         String?      @db.VarChar(10)
+  seoTitle       String?      @map("seo_title") @db.VarChar(255)
+  seoDescription String?      @map("seo_description") @db.Text
+  seoKeywords    String?      @map("seo_keywords") @db.Text
+  ogTitle        String?      @map("og_title") @db.VarChar(255)
+  ogDescription  String?      @map("og_description") @db.Text
+  ogImage        String?      @map("og_image") @db.VarChar(500)
+  canonicalUrl   String?      @map("canonical_url") @db.VarChar(500)
+  headHtml       String?      @map("head_html") @db.LongText
+  bodyHtml       String?      @map("body_html") @db.LongText
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+  sections       CmsSection[]
+
+  @@index([status])
+  @@map("cms_pages")
+}
+
+model CmsSection {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  pageSlug    String?  @map("page_slug") @db.VarChar(255)
+  pageId      String?  @map("page_id") @db.VarChar(36)
+  sectionType String   @map("section_type") @db.VarChar(50) // hero, features, testimonials, faq, etc.
+  content     String   @db.LongText // JSON blob
+  isVisible   Boolean  @default(true) @map("is_visible")
+  order       Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  page        CmsPage? @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@index([pageId])
+  @@index([pageSlug])
+  @@map("cms_sections")
+}
+
+model CmsGlobalSeo {
+  id                  String   @id @default("global-seo") @db.VarChar(36)
+  siteName            String?  @map("site_name") @db.VarChar(255)
+  siteDescription     String?  @map("site_description") @db.Text
+  defaultTitle        String?  @map("default_title") @db.VarChar(255)
+  defaultDescription  String?  @map("default_description") @db.Text
+  defaultKeywords     String?  @map("default_keywords") @db.Text
+  ogTitle             String?  @map("og_title") @db.VarChar(255)
+  ogDescription       String?  @map("og_description") @db.Text
+  ogImage             String?  @map("og_image") @db.VarChar(500)
+  twitterHandle       String?  @map("twitter_handle") @db.VarChar(100)
+  robotsTxt           String?  @map("robots_txt") @db.LongText
+  googleAnalyticsId   String?  @map("google_analytics_id") @db.VarChar(100)
+  googleTagManagerId  String?  @map("google_tag_manager_id") @db.VarChar(100)
+  googleVerification  String?  @map("google_verification") @db.VarChar(255)
+  bingVerification    String?  @map("bing_verification") @db.VarChar(255)
+  schemaMarkup        String?  @map("schema_markup") @db.LongText // JSON
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@map("cms_global_seo")
+}
+
+model CmsBrandAsset {
+  id             String   @id @default("brand-assets") @db.VarChar(36)
+  logoUrl        String?  @map("logo_url") @db.VarChar(500)
+  faviconUrl     String?  @map("favicon_url") @db.VarChar(500)
+  primaryColor   String?  @map("primary_color") @db.VarChar(20)
+  secondaryColor String?  @map("secondary_color") @db.VarChar(20)
+  accentColor    String?  @map("accent_color") @db.VarChar(20)
+  fontFamily     String?  @map("font_family") @db.VarChar(100)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("cms_brand_assets")
+}
+
+model CmsNavigation {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  label     String   @db.VarChar(255)
+  url       String?  @db.VarChar(500)
+  icon      String?  @db.VarChar(100)
+  pageId    String?  @map("page_id") @db.VarChar(36)
+  parentId  String?  @map("parent_id") @db.VarChar(36)
+  navType   String?  @map("nav_type") @db.VarChar(20) // header, footer
+  order     Int      @default(0)
+  isVisible Boolean  @default(true) @map("is_visible")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([navType])
+  @@index([parentId])
+  @@map("cms_navigation")
+}
+
+model CmsRootFile {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  filename  String   @unique @db.VarChar(255)
+  content   String?  @db.LongText // For text-based files like robots.txt, sitemap.xml
+  mimeType  String?  @map("mime_type") @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("cms_root_files")
+}
+
+model CmsMedia {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  filename  String   @db.VarChar(255)
+  url       String   @db.VarChar(500)
+  mimeType  String?  @map("mime_type") @db.VarChar(100)
+  size      Int?
+  folder    String?  @db.VarChar(255)
+  altText   String?  @map("alt_text") @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("cms_media")
+}
+
+model CmsForm {
+  id          String               @id @default(uuid()) @db.VarChar(36)
+  name        String               @db.VarChar(255)
+  description String?              @db.Text
+  fields      String               @db.LongText // JSON array of field definitions
+  isPublic    Boolean              @default(true) @map("is_public")
+  createdAt   DateTime             @default(now()) @map("created_at")
+  updatedAt   DateTime             @updatedAt @map("updated_at")
+  submissions CmsFormSubmission[]
+
+  @@map("cms_forms")
+}
+
+model CmsFormSubmission {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  formId    String   @map("form_id") @db.VarChar(36)
+  data      String   @db.LongText // JSON submission data
+  ipAddress String?  @map("ip_address") @db.VarChar(45)
+  userAgent String?  @map("user_agent") @db.Text
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  form      CmsForm  @relation(fields: [formId], references: [id], onDelete: Cascade)
+
+  @@index([formId])
+  @@map("cms_form_submissions")
+}
+
+model CmsTheme {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  name      String   @db.VarChar(255)
+  isActive  Boolean  @default(false) @map("is_active")
+  config    String   @db.LongText // JSON theme configuration
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("cms_themes")
+}
+
+model CmsRedirect {
+  id         String   @id @default(uuid()) @db.VarChar(36)
+  oldUrl     String   @map("old_url") @db.VarChar(500)
+  newUrl     String   @map("new_url") @db.VarChar(500)
+  statusCode Int      @default(301) @map("status_code")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@map("cms_redirects")
+}
+
+model CmsBlog {
+  id            String    @id @default(uuid()) @db.VarChar(36)
+  title         String    @db.VarChar(255)
+  slug          String    @unique @db.VarChar(255)
+  content       String    @db.LongText
+  excerpt       String?   @db.Text
+  featuredImage String?   @map("featured_image") @db.VarChar(500)
+  status        String    @default("draft") @db.VarChar(20) // draft, published
+  publishedAt   DateTime? @map("published_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([slug])
+  @@index([status])
+  @@map("cms_blogs")
+}

@@ -1,0 +1,55 @@
+--- stats.controller.ts
++++ stats.controller.ts
+@@ -237,6 +237,56 @@
+     }
+ 
++    @Get('by-merchant')
++    async getByMerchant(
++        @Query('fromDate') fromDate?: string,
++        @Query('toDate') toDate?: string,
++    ) {
++        let dateFilter: any = undefined;
++        if (fromDate || toDate) {
++            dateFilter = {};
++            if (fromDate) {
++                const start = new Date(fromDate);
++                start.setHours(0, 0, 0, 0);
++                dateFilter.gte = start;
++            }
++            if (toDate) {
++                const end = new Date(toDate);
++                end.setHours(23, 59, 59, 999);
++                dateFilter.lte = end;
++            }
++        }
++
++        const orders = await this.prisma.order.findMany({
++            where: {
++                status: 'COMPLETED',
++                ...(fromDate || toDate ? { createdAt: dateFilter } : {})
++            },
++            select: { merchantId: true, amount: true, metadata: true },
++        });
++
++        const byMerchant = new Map<string, number>();
++
++        for (const o of orders) {
++            let mId = o.merchantId;
++            if (!mId) continue;
++            
++            const isPlatform = (o.metadata as any)?.isPlatform === true;
++            if (!isPlatform) {
++                byMerchant.set(mId, (byMerchant.get(mId) || 0) + Number(o.amount || 0));
++            }
++        }
++
++        const data = Array.from(byMerchant.entries()).map(([merchantId, volume]) => ({
++            merchantId,
++            volume
++        }));
++            
++        return { success: true, data };
++    }
++
+     /** Platform/super-admin: orders and success amount per organization */
+     @Get('by-organization')

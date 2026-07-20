@@ -1,0 +1,384 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Merchant {
+  id                   String     @id @default(uuid()) @db.VarChar(36)
+  organizationId       String     @map("organization_id") @db.VarChar(36)
+  name                 String     @db.VarChar(255)
+  businessName         String?    @map("business_name") @db.VarChar(255)
+  businessType         String?    @map("business_type") @db.VarChar(100)
+  businessEmail        String?    @map("business_email") @db.VarChar(255)
+  businessPhone        String?    @map("business_phone") @db.VarChar(15)
+  website              String?    @db.VarChar(500)
+  gstin                String?    @db.VarChar(15)
+  pan                  String?    @db.VarChar(10)
+  isActive             Boolean    @default(true) @map("is_active")
+  verified             Boolean    @default(false)
+  verifiedAt           DateTime?  @map("verified_at")
+  createdAt            DateTime   @default(now()) @map("created_at")
+  updatedAt            DateTime   @updatedAt @map("updated_at")
+  
+  orders               Order[]
+  transactions         Transaction[]
+  providers            MerchantProvider[]
+
+  @@index([organizationId])
+  @@index([isActive])
+  @@map("merchants")
+}
+
+model Order {
+  id              String   @id @default(uuid()) @db.VarChar(36)
+  externalOrderId String   @unique @map("external_order_id") @db.VarChar(100)
+  organizationId  String   @map("organization_id") @db.VarChar(36)
+  merchantId      String   @map("merchant_id") @db.VarChar(36)
+  providerId      String?  @map("provider_id") @db.VarChar(36) // Selected provider
+  createdById     String?  @map("created_by_id") @db.VarChar(36) // OrgUser ID
+  
+  // Amount
+  amount   Decimal @db.Decimal(15, 2)
+  currency String  @default("INR") @db.VarChar(3)
+  
+  // Status
+  status      OrderStatus @default(PENDING)
+  paymentMethod PaymentMethod @default(UPI) @map("payment_method")
+  
+  // Customer Info
+  customerName   String? @map("customer_name") @db.VarChar(255)
+  customerMobile String? @map("customer_mobile") @db.VarChar(15)
+  customerEmail  String? @map("customer_email") @db.VarChar(255)
+  description    String? @db.Text
+  
+  // Callbacks
+  callbackUrl String?  @map("callback_url") @db.VarChar(500)
+  redirectUrl String?  @map("redirect_url") @db.VarChar(500)
+  webhookSent Boolean  @default(false) @map("webhook_sent")
+  
+  // Metadata
+  metadata Json?
+  
+  // Timestamps
+  expiresAt   DateTime? @map("expires_at")
+  completedAt DateTime? @map("completed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  
+  merchant      Merchant          @relation(fields: [merchantId], references: [id])
+  provider      MerchantProvider? @relation(fields: [providerId], references: [id])
+  transactions  Transaction[]
+  paymentLink   PaymentLink?
+  callbackLogs  CallbackLog[]
+  
+  @@index([externalOrderId])
+  @@index([organizationId])
+  @@index([merchantId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model PaymentLink {
+  id                 String                 @id @default(uuid()) @db.VarChar(36)
+  linkToken          String                 @unique @map("link_token") @db.VarChar(100)
+  orderId            String                 @map("order_id") @db.VarChar(36)
+  shortUrl           String?                @unique @map("short_url") @db.VarChar(255)
+  longUrl            String?                @map("long_url") @db.VarChar(500)
+  expiresAt          DateTime?              @map("expires_at")
+  isActive           Boolean                @default(true) @map("is_active")
+  isSingleUse        Boolean                @default(true) @map("is_single_use")
+  clickCount         Int                    @default(0) @map("click_count")
+  paymentCompleted   Boolean                @default(false) @map("payment_completed")
+  metadata           String?                @db.LongText
+  createdAt          DateTime               @default(now()) @map("created_at")
+  updatedAt          DateTime               @updatedAt @map("updated_at")
+  completedAt        DateTime?              @map("completed_at")
+  expiredAt          DateTime?              @map("expired_at")
+  firstScannedAt     DateTime?              @map("first_scanned_at")
+  lastScannedAt      DateTime?              @map("last_scanned_at")
+  paymentInitiatedAt DateTime?              @map("payment_initiated_at")
+  qrState            payment_links_qr_state @default(GENERATED) @map("qr_state")
+  scannedCount       Int                    @default(0) @map("scanned_count")
+  order              Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  qr_scan_logs       qr_scan_logs[]
+
+  @@index([orderId])
+  @@index([linkToken])
+  @@index([isActive])
+  @@index([expiresAt])
+  @@index([qrState])
+  @@index([firstScannedAt])
+  @@map("payment_links")
+}
+
+model callback_logs {
+  id               String                         @id @db.VarChar(36)
+  order_id         String                         @db.VarChar(36)
+  callback_type    String                         @db.VarChar(50)
+  request_method   String                         @db.VarChar(10)
+  request_headers  String?                        @db.LongText
+  response_status  Int?
+  error_message    String?                        @db.Text
+  ip_address       String?                        @db.VarChar(45)
+  user_agent       String?                        @db.Text
+  created_at       DateTime                       @default(now())
+  processed_at     DateTime?
+  processed_status callback_logs_processed_status
+  provider_code    String?                        @db.VarChar(50)
+  request_body     String?                        @db.LongText
+  request_query    String?                        @db.LongText
+  response_body    String?                        @db.LongText
+  orders           Order                          @relation(fields: [order_id], references: [id], onDelete: Cascade)
+
+  @@index([created_at])
+  @@index([order_id])
+  @@index([provider_code])
+  @@index([callback_type])
+  @@index([processed_status])
+}
+
+model merchant_connectors {
+  id                  String                          @id @db.VarChar(36)
+  merchant_id         String                          @db.VarChar(36)
+  provider_account_id String?                         @db.VarChar(36)
+  connector_config    String?                         @db.LongText
+  is_active           Boolean                         @default(true)
+  priority            Int                             @default(1)
+  created_at          DateTime                        @default(now())
+  updated_at          DateTime
+  unit_id             String?                         @db.VarChar(255)
+  group_id            String?                         @db.VarChar(255)
+  role_name           String?                         @db.VarChar(100)
+  group_value         String?                         @db.VarChar(255)
+  config_type         merchant_connectors_config_type @default(phonepe_config)
+  phone_number        String?                         @db.VarChar(15)
+  provider_code       String                          @db.VarChar(50)
+  merchants           Merchant                        @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  provider_accounts   provider_accounts?              @relation(fields: [provider_account_id], references: [id])
+
+  @@unique([merchant_id, provider_code, phone_number])
+  @@index([is_active])
+  @@index([merchant_id])
+  @@index([merchant_id, provider_code, is_active])
+  @@index([provider_code])
+  @@index([provider_account_id], map: "merchant_connectors_provider_account_id_fkey")
+}
+
+model otp_logs {
+  id          String    @id @db.VarChar(36)
+  mobile      String    @db.VarChar(15)
+  otp_hash    String    @db.VarChar(64)
+  reference   String    @unique @db.VarChar(32)
+  type        String    @default("sms") @db.VarChar(20)
+  user_id     String?   @db.VarChar(36)
+  expires_at  DateTime
+  verified_at DateTime?
+  attempts    Int       @default(0)
+  created_at  DateTime  @default(now())
+  updated_at  DateTime
+  users       users?    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([expires_at])
+  @@index([mobile])
+  @@index([reference])
+  @@index([user_id])
+}
+
+model phonepe_transactions {
+  id                          String    @id
+  user_id                     String    @db.VarChar(36)
+  merchant_id                 String    @db.VarChar(36)
+  transaction_id              String
+  unit_id                     String?
+  provider_reference_id       String?
+  merchant_transaction_id     String?
+  global_payment_id           String?
+  utr                         String?
+  transaction_type            String    @db.VarChar(50)
+  payment_state               String    @db.VarChar(50)
+  amount                      Decimal   @db.Decimal(10, 2)
+  customer_name               String?   @db.VarChar(255)
+  customer_vpa                String?   @db.VarChar(255)
+  customer_mobile             String?   @db.VarChar(20)
+  payment_app                 String?   @db.VarChar(50)
+  bank_id                     String?   @db.VarChar(50)
+  processing_rail             String?   @db.VarChar(50)
+  store_name                  String?   @db.VarChar(255)
+  terminal_name               String?   @db.VarChar(255)
+  qr_code_id                  String?   @db.VarChar(100)
+  settlement_status           String?   @db.VarChar(50)
+  settlement_amount           Decimal?  @db.Decimal(10, 2)
+  settlement_date             DateTime?
+  settlement_utr              String?   @db.VarChar(255)
+  transaction_date            DateTime
+  raw_response                String    @db.LongText
+  created_at                  DateTime  @default(now())
+  updated_at                  DateTime
+  backend_error_code          String?   @db.VarChar(20)
+  card_issuer                 String?   @db.VarChar(50)
+  cashback_applied            Boolean?
+  customer_reference_id       String?   @db.VarChar(100)
+  error_message               String?   @db.Text
+  instrument_identifier_key   String?   @db.VarChar(50)
+  instrument_type             String?   @db.VarChar(50)
+  is_external_vpa_transaction Boolean?
+  merchant_order_id           String?   @db.VarChar(100)
+  merchant_type               String?   @db.VarChar(50)
+  offer_adjustment            Int?
+  pay_response_code           String?   @db.VarChar(50)
+  phonepe_merchant_id         String?   @db.VarChar(100)
+  processing_mode_type        String?   @db.VarChar(100)
+  solution_name               String?   @db.VarChar(50)
+  solution_type               String?   @db.VarChar(50)
+  store_id                    String?   @db.VarChar(100)
+  terminal_id                 String?   @db.VarChar(100)
+  transaction_note            String?   @db.VarChar(500)
+  merchants                   Merchant  @relation(fields: [merchant_id], references: [id], onDelete: Cascade)
+  users                       users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([transaction_id, merchant_id])
+  @@index([merchant_id])
+  @@index([payment_state])
+  @@index([transaction_date])
+  @@index([transaction_id])
+  @@index([user_id])
+  @@index([utr])
+}
+
+model provider_accounts {
+  id                  String                   @id @db.VarChar(36)
+  user_id             String?                  @db.VarChar(36)
+  merchant_id         String?                  @db.VarChar(36)
+  account_identifier  String?                  @db.VarChar(255)
+  credentials         String                   @db.LongText
+  status              provider_accounts_status @default(active)
+  expires_at          DateTime?
+  last_used_at        DateTime?
+  metadata            String?                  @db.LongText
+  created_at          DateTime                 @default(now())
+  updated_at          DateTime
+  provider_code       String                   @db.VarChar(50)
+  merchant_connectors merchant_connectors[]
+  users               users?                   @relation(fields: [user_id], references: [id])
+
+  @@index([expires_at])
+  @@index([provider_code, user_id])
+  @@index([status])
+  @@index([provider_code])
+  @@index([user_id], map: "provider_accounts_user_id_fkey")
+}
+
+model qr_scan_logs {
+  id              String      @id @db.VarChar(36)
+  payment_link_id String      @db.VarChar(36)
+  ip_address      String?     @db.VarChar(45)
+  user_agent      String?     @db.Text
+  location        String?     @db.VarChar(255)
+  device_type     String?     @db.VarChar(50)
+  scan_source     String?     @db.VarChar(100)
+  scanned_at      DateTime    @default(now())
+  payment_links   PaymentLink @relation(fields: [payment_link_id], references: [id], onDelete: Cascade)
+
+  @@index([ip_address])
+  @@index([payment_link_id])
+  @@index([scanned_at])
+}
+
+model users {
+  id                   String                 @id @db.VarChar(36)
+  name                 String                 @db.VarChar(255)
+  mobile               String                 @unique @db.VarChar(15)
+  email                String?                @unique @db.VarChar(255)
+  password_hash        String                 @db.VarChar(255)
+  role                 users_role             @default(user)
+  is_active            Boolean                @default(true)
+  email_verified       Boolean                @default(false)
+  mobile_verified      Boolean                @default(false)
+  profile_image        String?                @db.VarChar(500)
+  company              String?                @db.VarChar(255)
+  pan                  String?                @unique @db.VarChar(10)
+  aadhaar              String?                @unique @db.VarChar(12)
+  location             String?                @db.VarChar(100)
+  pin                  String?                @db.VarChar(6)
+  user_token           String?                @unique @db.VarChar(32)
+  instance_id          String?                @unique @db.VarChar(50)
+  sponsor_id           String?                @db.VarChar(50)
+  upi_id               String?                @db.VarChar(100)
+  referral_code        String?                @unique @db.VarChar(50)
+  referred_by          String?                @db.VarChar(36)
+  last_login_at        DateTime?
+  created_at           DateTime               @default(now())
+  updated_at           DateTime
+  deleted_at           DateTime?
+  merchants            Merchant[]
+  orders               Order[]
+  otp_logs             otp_logs[]
+  phonepe_transactions phonepe_transactions[]
+  provider_accounts    provider_accounts[]
+
+  @@index([email])
+  @@index([mobile])
+  @@index([referral_code])
+  @@index([referred_by], map: "users_referred_by_fkey")
+  @@index([role])
+}
+
+enum orders_status {
+  pending
+  processing
+  completed
+  failed
+  cancelled
+  refunded
+  expired
+}
+
+enum provider_accounts_status {
+  active
+  inactive
+  suspended
+  expired
+}
+
+enum orders_payment_method {
+  upi
+  wallet
+  bank
+  card
+}
+
+enum merchant_connectors_config_type {
+  phonepe_config
+  paytm_config
+  sbi_config
+}
+
+enum merchants_settings_type {
+  merchant_settings
+}
+
+enum payment_links_qr_state {
+  GENERATED
+  SCANNED
+  PAYMENT_INITIATED
+  COMPLETED
+  EXPIRED
+  CANCELLED
+}
+
+enum users_role {
+  admin
+  user
+}
+
+enum callback_logs_processed_status {
+  received
+  processing
+  processed
+  failed
+}

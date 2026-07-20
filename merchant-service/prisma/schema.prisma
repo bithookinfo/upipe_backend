@@ -1,0 +1,258 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model BusinessCategory {
+  id          String  @id @default(uuid()) @db.VarChar(36)
+  name        String  @db.VarChar(255)
+  code        String  @unique @db.VarChar(50)
+  description String? @db.Text
+  icon        String? @db.VarChar(100)
+  
+  isActive  Boolean @default(true) @map("is_active")
+  sortOrder Int     @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  
+  merchants Merchant[]
+  
+  @@index([code])
+  @@index([isActive])
+  @@map("business_categories")
+}
+
+model Merchant {
+  id             String @id @default(uuid()) @db.VarChar(36)
+  organizationId String @map("organization_id") @db.VarChar(36) // Foreign key to Organization Service
+  
+  // Basic Info
+  name          String  @db.VarChar(255)
+  businessName  String? @map("business_name") @db.VarChar(255)
+  categoryId    String? @map("category_id") @db.VarChar(36)
+  
+  // Contact
+  email String? @db.VarChar(255)
+  phone String? @db.VarChar(15)
+  
+  // Address
+  address  String? @db.VarChar(500)
+  city     String? @db.VarChar(100)
+  state    String? @db.VarChar(100)
+  pincode  String? @db.VarChar(10)
+  
+  // Business Details
+  gstin  String? @db.VarChar(15)
+  pan    String? @db.VarChar(10)
+  
+  // Status
+  status       MerchantStatus @default(PENDING)
+  statusReason String?        @map("status_reason") @db.VarChar(255)
+  
+  isActive  Boolean   @default(true) @map("is_active")
+  isFallback Boolean   @default(false) @map("is_fallback")
+  isPlatform Boolean   @default(false) @map("is_platform")
+  verified  Boolean   @default(false)
+  verifiedAt DateTime? @map("verified_at")
+  
+  // Additional Data
+  metadata  Json?     // Store provider-specific data (Paytm QR, merchant IDs, etc.)
+  
+  // Soft delete: when set, merchant is treated as deleted for listing/sync; history preserved
+  deletedAt DateTime? @map("deleted_at")
+  
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  category     BusinessCategory?  @relation(fields: [categoryId], references: [id])
+  config       MerchantConfig?
+  providers    MerchantProvider[]
+  
+  @@index([organizationId])
+  @@index([categoryId])
+  @@index([isActive])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("merchants")
+}
+
+enum MerchantStatus {
+  PENDING
+  ACTIVE
+  LIMIT_EXCEEDED
+  SUSPENDED
+  DEACTIVATED
+}
+
+/// Merchant Configuration (limits, hours, etc)
+model MerchantConfig {
+  id         String @id @default(uuid()) @db.VarChar(36)
+  merchantId String @unique @map("merchant_id") @db.VarChar(36)
+  
+  // Operating Hours
+  openTime  String @map("open_time") @db.VarChar(5)
+  closeTime String @map("close_time") @db.VarChar(5)
+  timezone  String @default("Asia/Kolkata") @db.VarChar(50)
+  
+  // Weekly Holidays
+  weeklyHolidays Json @default("[]") @map("weekly_holidays")
+  
+  // Multiple Operating Time Slots (NEW)
+  // Format: [{"open": "09:00", "close": "13:00"}, {"open": "15:00", "close": "21:00"}]
+  // When set, this takes precedence over openTime/closeTime
+  operatingSlots Json? @map("operating_slots")
+  
+  // Daily Limits (Enforced)
+  dailyMaxAmount   Decimal @map("daily_max_amount") @db.Decimal(15, 2)
+  dailyMaxTxnCount Int     @map("daily_max_txn_count")
+  dailyMinAmount   Decimal @map("daily_min_amount") @db.Decimal(15, 2)
+  dailyMinTxnCount Int     @map("daily_min_txn_count")
+  
+  // Monthly Limits (Enforced)
+  monthlyMaxAmount   Decimal @map("monthly_max_amount") @db.Decimal(15, 2)
+  monthlyMaxTxnCount Int?    @map("monthly_max_txn_count")
+  monthlyMinAmount   Decimal @map("monthly_min_amount") @db.Decimal(15, 2)
+  monthlyMinTxnCount Int?    @map("monthly_min_txn_count")
+  
+  // Per-Transaction Limits
+  minTxnAmount Decimal? @map("min_txn_amount") @db.Decimal(15, 2)
+  maxTxnAmount Decimal? @map("max_txn_amount") @db.Decimal(15, 2)
+  perMinuteMaxTxn Int?    @map("per_minute_max_txn")
+  
+  // Current Usage (Real-time tracking)
+  currentDailyAmount   Decimal  @default(0) @map("current_daily_amount") @db.Decimal(15, 2)
+  currentDailyTxnCount Int      @default(0) @map("current_daily_txn_count")
+  lastDailyReset       DateTime @default(now()) @map("last_daily_reset")
+  
+  currentMonthlyAmount   Decimal  @default(0) @map("current_monthly_amount") @db.Decimal(15, 2)
+  currentMonthlyTxnCount Int      @default(0) @map("current_monthly_txn_count")
+  lastMonthlyReset       DateTime @default(now()) @map("last_monthly_reset")
+  
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  
+  merchant Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  
+  @@map("merchant_configs")
+}
+
+/// Merchant Provider Connections (PhonePe, Paytm, GPay)
+model MerchantProvider {
+  id                String                    @id @default(uuid()) @db.VarChar(36)
+  merchantId        String                    @map("merchant_id") @db.VarChar(36)
+  providerType      ProviderType              @map("provider_type")
+  accountIdentifier String                    @map("account_identifier") @db.VarChar(255)
+  
+  // Encrypted credentials (tokens, keys, etc)
+  credentials       Json
+  
+  status            MerchantProviderStatus    @default(ACTIVE)
+  isActive          Boolean                   @default(true) @map("is_active")
+  expiresAt         DateTime?                 @map("expires_at")
+  lastUsedAt        DateTime?                 @map("last_used_at")
+  /// Last time transactions were successfully synced for this provider; used for sync range and reconnect backfill
+  lastSyncedAt      DateTime?                 @map("last_synced_at")
+  
+  metadata          Json?
+  createdAt         DateTime                  @default(now()) @map("created_at")
+  updatedAt         DateTime                  @updatedAt @map("updated_at")
+  
+  merchant          Merchant                  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  
+  @@unique([merchantId, providerType])
+  @@index([merchantId])
+  @@index([providerType])
+  @@index([status])
+  @@map("merchant_providers")
+}
+
+enum ProviderType {
+  PHONEPE
+  PAYTM
+  GPAY
+  RAZORPAY
+  CASHFREE
+  BHARATPE
+  QUINTUS
+  HDFC
+}
+
+enum MerchantProviderStatus {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+  SUSPENDED
+}
+
+/// Configuration Templates (reusable configs for merchants)
+model ConfigTemplate {
+  id             String  @id @default(uuid()) @db.VarChar(36)
+  organizationId String? @map("organization_id") @db.VarChar(36) // null = global template
+  name           String  @db.VarChar(100)
+  description    String? @db.VarChar(255)
+  
+  // Operating Hours
+  openTime  String @default("09:00") @map("open_time") @db.VarChar(5)
+  closeTime String @default("21:00") @map("close_time") @db.VarChar(5)
+  
+  // Multiple Operating Time Slots (NEW)
+  // Format: [{"open": "09:00", "close": "13:00"}, {"open": "15:00", "close": "21:00"}]
+  operatingSlots Json? @map("operating_slots")
+  
+  // Weekly Holidays (NEW)
+  // Format: [0, 6] where 0=Sunday, 6=Saturday
+  weeklyHolidays Json? @map("weekly_holidays")
+  
+  // Daily Limits
+  dailyMaxAmount   Decimal @default(50000) @map("daily_max_amount") @db.Decimal(15, 2)
+  dailyMaxTxnCount Int     @default(100) @map("daily_max_txn_count")
+  
+  // Monthly Limits
+  monthlyMaxAmount   Decimal @default(1000000) @map("monthly_max_amount") @db.Decimal(15, 2)
+  monthlyMaxTxnCount Int?    @map("monthly_max_txn_count")
+  
+  // Per-Transaction Limits
+  minTxnAmount Decimal? @map("min_txn_amount") @db.Decimal(15, 2)
+  maxTxnAmount Decimal? @map("max_txn_amount") @db.Decimal(15, 2)
+  
+  isGlobal  Boolean  @default(false) @map("is_global")  // true = visible to all orgs
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  
+  @@index([organizationId])
+  @@index([isGlobal])
+  @@index([isActive])
+  @@map("config_templates")
+}
+
+model PaymentGateway {
+  id          String  @id @default(uuid()) @db.VarChar(36)
+  code        String  @unique @db.VarChar(50) // phonepe, paytm, gpay
+  name        String  @db.VarChar(100) // Display name
+  description String? @db.VarChar(255)
+  
+  // Gateway details
+  type        String  @default("UPI") @db.VarChar(50) // UPI, WALLET, BANK, CARD
+  logo        String? @db.LongText // Path to logo or base64
+  website     String? @db.VarChar(255)
+  
+  // Configuration
+  isActive    Boolean @default(true) @map("is_active")
+  sortOrder   Int     @default(0) @map("sort_order")
+  
+  // Metadata
+  metadata    Json?   // Extra config like API endpoints, supported features
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  @@index([code])
+  @@index([isActive])
+  @@index([type])
+  @@map("payment_gateways")
+}

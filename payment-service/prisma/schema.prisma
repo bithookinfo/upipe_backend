@@ -1,0 +1,206 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Order {
+  id              String        @id @default(uuid()) @db.VarChar(36)
+  externalOrderId String        @unique @map("external_order_id") @db.VarChar(100)
+  clientReferenceId String?     @map("client_reference_id") @db.VarChar(30)
+  /// UTR (or bank ref) from payment; used to match full transaction response to our order after merchant/order lookup by id fails
+  utr             String?       @db.VarChar(50)
+  organizationId  String        @map("organization_id") @db.VarChar(36)
+  merchantId      String        @map("merchant_id") @db.VarChar(36)
+  providerId      String?       @map("provider_id") @db.VarChar(36)
+  createdById     String?       @map("created_by_id") @db.VarChar(36)
+  amount          Decimal       @db.Decimal(15, 2)
+  currency        String        @default("INR") @db.VarChar(3)
+  status          OrderStatus   @default(PENDING)
+  paymentMethod   PaymentMethod @default(UPI) @map("payment_method")
+  customerName    String?       @map("customer_name") @db.VarChar(255)
+  customerMobile  String?       @map("customer_mobile") @db.VarChar(15)
+  customerEmail   String?       @map("customer_email") @db.VarChar(255)
+  description     String?       @db.Text
+  remark          String?       @db.Text
+  callbackUrl     String?       @map("callback_url") @db.VarChar(500)
+  redirectUrl     String?       @map("redirect_url") @db.VarChar(500)
+  webhookSent     Boolean       @default(false) @map("webhook_sent")
+  webhookFailed   Boolean       @default(false) @map("webhook_failed")
+  webhookFailureReason String?  @map("webhook_failure_reason") @db.Text
+  metadata        Json?
+  expiresAt       DateTime?     @map("expires_at")
+  completedAt     DateTime?     @map("completed_at")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  callbackLogs    CallbackLog[]
+  paymentLink     PaymentLink?
+  transactions    Transaction[]
+
+  @@index([externalOrderId])
+  @@index([clientReferenceId])
+  @@index([utr])
+  @@index([organizationId])
+  @@index([merchantId])
+  @@index([status])
+  @@index([status, webhookSent]) // Composite index for webhook cron
+  @@index([organizationId, status, callbackUrl])
+  @@index([organizationId, status, webhookSent, webhookFailed])
+  @@index([organizationId, status, updatedAt])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+/// Unified Transaction Model
+model Transaction {
+  id                    String            @id @default(uuid()) @db.VarChar(36)
+  orderId               String?           @map("order_id") @db.VarChar(36)
+  merchantId            String            @map("merchant_id") @db.VarChar(36)
+  providerId            String            @map("provider_id") @db.VarChar(36)
+  externalTransactionId String            @unique @map("external_transaction_id") @db.VarChar(255)
+  amount                Decimal           @db.Decimal(15, 2)
+  fee                   Decimal           @default(0.00) @db.Decimal(15, 2)
+  tax                   Decimal           @default(0.00) @db.Decimal(15, 2)
+  netAmount             Decimal           @map("net_amount") @db.Decimal(15, 2)
+  currency              String            @default("INR") @db.VarChar(3)
+  status                TransactionStatus @default(PENDING)
+  paymentMethod         PaymentMethod     @map("payment_method")
+  providerCode          String?           @map("provider_code") @db.VarChar(50)
+  providerResponse      Json?             @map("provider_response")
+  failureReason         String?           @map("failure_reason") @db.Text
+  utr                   String?           @db.VarChar(50)
+  bankRefNumber         String?           @map("bank_ref_number") @db.VarChar(50)
+  remark                String?           @db.Text
+  initiatedAt           DateTime?         @map("initiated_at")
+  completedAt           DateTime?         @map("completed_at")
+  failedAt              DateTime?         @map("failed_at")
+  createdAt             DateTime          @default(now()) @map("created_at")
+  updatedAt             DateTime          @updatedAt @map("updated_at")
+  customerContact       String?           @map("customer_contact") @db.VarChar(255)
+  customerName          String?           @map("customer_name") @db.VarChar(255)
+  paymentApp            String?           @map("payment_app") @db.VarChar(50)
+  order                 Order?            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([merchantId])
+  @@index([externalTransactionId])
+  @@index([status])
+  @@index([utr])
+  @@index([createdAt])
+  @@map("transactions")
+}
+
+/// Payment Links / QR Codes
+model PaymentLink {
+  id                 String           @id @default(uuid()) @db.VarChar(36)
+  orderId            String           @unique @map("order_id") @db.VarChar(36)
+  linkToken          String           @unique @map("link_token") @db.VarChar(100)
+  shortUrl           String?          @unique @map("short_url") @db.VarChar(255)
+  longUrl            String?          @map("long_url") @db.VarChar(500)
+  qrData             String?          @map("qr_data") @db.Text
+  state              PaymentLinkState @default(GENERATED)
+  expiresAt          DateTime?        @map("expires_at")
+  isSingleUse        Boolean          @default(true) @map("is_single_use")
+  scannedCount       Int              @default(0) @map("scanned_count")
+  firstScannedAt     DateTime?        @map("first_scanned_at")
+  lastScannedAt      DateTime?        @map("last_scanned_at")
+  paymentInitiatedAt DateTime?        @map("payment_initiated_at")
+  completedAt        DateTime?        @map("completed_at")
+  expiredAt          DateTime?        @map("expired_at")
+  isActive           Boolean          @default(true) @map("is_active")
+  metadata           Json?
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+  order              Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([linkToken])
+  @@index([state])
+  @@index([expiresAt])
+  @@map("payment_links")
+}
+
+/// Callback Logs for webhook tracking
+model CallbackLog {
+  id          String    @id @default(uuid()) @db.VarChar(36)
+  orderId     String    @map("order_id") @db.VarChar(36)
+  callbackUrl String    @map("callback_url") @db.VarChar(500)
+  payload     Json
+  response    Json?
+  statusCode  Int?      @map("status_code")
+  success     Boolean   @default(false)
+  retryCount  Int       @default(0) @map("retry_count")
+  nextRetryAt DateTime? @map("next_retry_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([success])
+  @@index([nextRetryAt])
+  @@index([success, nextRetryAt, retryCount]) // Composite index for retry queries
+  @@map("callback_logs")
+}
+
+model InAppNotification {
+  id              String   @id @default(uuid()) @db.VarChar(36)
+  organizationId  String   @map("organization_id") @db.VarChar(36)
+  orderId         String?  @map("order_id") @db.VarChar(36)
+  externalOrderId String?  @map("external_order_id") @db.VarChar(100)
+  type            String   @default("order_completed") @db.VarChar(50)
+  title           String   @db.VarChar(255)
+  message         String   @db.VarChar(500)
+  createdAt       DateTime @default(now()) @map("created_at")
+  reads           NotificationRead[]
+
+  @@index([organizationId])
+  @@index([createdAt])
+  @@index([organizationId, createdAt])
+  @@map("in_app_notifications")
+}
+
+model NotificationRead {
+  id             String   @id @default(uuid()) @db.VarChar(36)
+  notificationId String   @map("notification_id") @db.VarChar(36)
+  userId         String   @map("user_id") @db.VarChar(36)
+  readAt         DateTime @default(now()) @map("read_at")
+  notification   InAppNotification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId])
+  @@map("notification_reads")
+}
+
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+  REFUNDED
+  EXPIRED
+}
+
+enum PaymentMethod {
+  UPI
+  WALLET
+  BANK
+  CARD
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentLinkState {
+  GENERATED
+  SCANNED
+  PAYMENT_INITIATED
+  COMPLETED
+  EXPIRED
+}
