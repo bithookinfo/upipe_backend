@@ -44,7 +44,7 @@ export class GatewayController {
       merchants: this.configService.get("MERCHANT_SERVICE_URL"),
       merchant: this.configService.get("MERCHANT_SERVICE_URL"),
       "business-categories": this.configService.get("MERCHANT_SERVICE_URL"),
-      gateway: this.configService.get("PAYMENT_SERVICE_URL"),
+      gateway: this.configService.get("MERCHANT_SERVICE_URL"),
       "config-templates": this.configService.get("MERCHANT_SERVICE_URL"),
       routing: this.configService.get("MERCHANT_SERVICE_URL"),
 
