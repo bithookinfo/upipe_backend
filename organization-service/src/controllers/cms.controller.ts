@@ -180,7 +180,7 @@ export class CmsAdminController {
   }
 
   @Post('root-files')
-  async upsertRootFile(@Body() body: { filename: string; content?: string; mimeType?: string }) {
+  async upsertRootFile(@Body() body: { filename: string; content?: string }) {
     const data = await this.cmsService.upsertRootFile(body);
     return { success: true, data };
   }
@@ -403,7 +403,7 @@ export class CmsPublicController {
   @Get('root-files/:filename')
   async getRootFile(@Param('filename') filename: string, @Res() res: Response) {
     const data = await this.cmsService.getRootFileByFilename(filename);
-    res.setHeader('Content-Type', data.mimeType || 'text/plain');
+    res.setHeader('Content-Type', 'text/plain');
     res.send(data.content);
   }
 

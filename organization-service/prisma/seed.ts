@@ -71,11 +71,12 @@ async function main() {
 
   const termsPage = await prisma.cmsPage.upsert({
     where: { slug: 'terms' },
-    update: {},
+    update: { url: '/terms' },
     create: {
       id: 'page-terms',
       title: 'Terms & Conditions',
       slug: 'terms',
+      url: '/terms',
       content: 'Our Terms and Conditions',
       status: 'published',
     },
@@ -83,11 +84,12 @@ async function main() {
 
   const privacyPage = await prisma.cmsPage.upsert({
     where: { slug: 'privacy' },
-    update: {},
+    update: { url: '/privacy' },
     create: {
       id: 'page-privacy',
       title: 'Privacy Policy',
       slug: 'privacy',
+      url: '/privacy',
       content: 'Our Privacy Policy',
       status: 'published',
     },
@@ -95,11 +97,12 @@ async function main() {
 
   const refundPage = await prisma.cmsPage.upsert({
     where: { slug: 'refund' },
-    update: {},
+    update: { url: '/refund' },
     create: {
       id: 'page-refund',
       title: 'Refund Policy',
       slug: 'refund',
+      url: '/refund',
       content: 'Our Refund Policy',
       status: 'published',
     },

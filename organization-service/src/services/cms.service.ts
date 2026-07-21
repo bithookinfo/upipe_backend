@@ -287,24 +287,20 @@ export class CmsService {
     return file;
   }
 
-  async upsertRootFile(data: { filename: string; content?: string; mimeType?: string }) {
-    const existing = await this.prisma.cmsRootFile.findUnique({ where: { filename: data.filename } });
-    if (existing) {
-      return this.prisma.cmsRootFile.update({
-        where: { id: existing.id },
-        data: { content: data.content, mimeType: data.mimeType },
-      });
-    }
-    return this.prisma.cmsRootFile.create({ data });
+  async upsertRootFile(data: { filename: string; content?: string }) {
+    return this.prisma.cmsRootFile.upsert({
+      where: { filename: data.filename },
+      update: { content: data.content },
+      create: {
+        filename: data.filename,
+        content: data.content,
+      },
+    });
   }
 
   async deleteRootFile(id: string) {
     return this.prisma.cmsRootFile.delete({ where: { id } });
   }
-
-  // =============================================
-  // MEDIA
-  // =============================================
 
   async getMedia(folder?: string) {
     const where: any = {};
