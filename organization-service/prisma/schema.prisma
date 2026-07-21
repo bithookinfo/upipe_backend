@@ -367,6 +367,8 @@ model CmsNavigation {
   footerCategory   CmsFooterCategory? @relation(fields: [footerCategoryId], references: [id], onDelete: SetNull)
   order            Int                @default(0)
   isVisible        Boolean            @default(true) @map("is_visible")
+  isExternal       Boolean            @default(false) @map("is_external")
+  openInNewTab     Boolean            @default(false) @map("open_in_new_tab")
   createdAt        DateTime           @default(now()) @map("created_at")
   updatedAt        DateTime           @updatedAt @map("updated_at")
 
