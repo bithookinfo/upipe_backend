@@ -341,21 +341,36 @@ model CmsBrandAsset {
   @@map("cms_brand_assets")
 }
 
+model CmsFooterCategory {
+  id           String          @id @default(uuid()) @db.VarChar(36)
+  name         String          @db.VarChar(255)
+  displayOrder Int             @default(0) @map("display_order")
+  isActive     Boolean         @default(true) @map("is_active")
+  createdAt    DateTime        @default(now()) @map("created_at")
+  updatedAt    DateTime        @updatedAt @map("updated_at")
+  links        CmsNavigation[]
+
+  @@map("cms_footer_categories")
+}
+
 model CmsNavigation {
-  id        String   @id @default(uuid()) @db.VarChar(36)
-  label     String   @db.VarChar(255)
-  url       String?  @db.VarChar(500)
-  icon      String?  @db.VarChar(100)
-  pageId    String?  @map("page_id") @db.VarChar(36)
-  parentId  String?  @map("parent_id") @db.VarChar(36)
-  navType   String?  @map("nav_type") @db.VarChar(20) // header, footer
-  order     Int      @default(0)
-  isVisible Boolean  @default(true) @map("is_visible")
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id               String             @id @default(uuid()) @db.VarChar(36)
+  label            String             @db.VarChar(255)
+  url              String?            @db.VarChar(500)
+  icon             String?            @db.VarChar(100)
+  pageId           String?            @map("page_id") @db.VarChar(36)
+  parentId         String?            @map("parent_id") @db.VarChar(36)
+  navType          String?            @map("nav_type") @db.VarChar(20) // header, footer
+  footerCategoryId String?            @map("footer_category_id") @db.VarChar(36)
+  footerCategory   CmsFooterCategory? @relation(fields: [footerCategoryId], references: [id], onDelete: SetNull)
+  order            Int                @default(0)
+  isVisible        Boolean            @default(true) @map("is_visible")
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
 
   @@index([navType])
   @@index([parentId])
+  @@index([footerCategoryId])
   @@map("cms_navigation")
 }
 

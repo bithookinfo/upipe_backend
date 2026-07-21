@@ -8,10 +8,11 @@ import {
   Param,
   Query,
   Req,
+  Res,
   Logger,
 } from '@nestjs/common';
 import { CmsService } from '../services/cms.service';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 
 // =============================================
 // ADMIN CMS CONTROLLER (requires auth via gateway)
@@ -137,6 +138,37 @@ export class CmsAdminController {
   @Delete('navigation/:id')
   async deleteNavigation(@Param('id') id: string) {
     await this.cmsService.deleteNavigation(id);
+    return { success: true, data: null };
+  }
+
+  // ---------- Footer Categories ----------
+  @Get('footer-categories')
+  async getFooterCategories() {
+    const data = await this.cmsService.getFooterCategories();
+    return { success: true, data };
+  }
+
+  @Get('footer-categories/:id')
+  async getFooterCategoryById(@Param('id') id: string) {
+    const data = await this.cmsService.getFooterCategoryById(id);
+    return { success: true, data };
+  }
+
+  @Post('footer-categories')
+  async createFooterCategory(@Body() body: any) {
+    const data = await this.cmsService.createFooterCategory(body);
+    return { success: true, data };
+  }
+
+  @Put('footer-categories/:id')
+  async updateFooterCategory(@Param('id') id: string, @Body() body: any) {
+    const data = await this.cmsService.updateFooterCategory(id, body);
+    return { success: true, data };
+  }
+
+  @Delete('footer-categories/:id')
+  async deleteFooterCategory(@Param('id') id: string) {
+    await this.cmsService.deleteFooterCategory(id);
     return { success: true, data: null };
   }
 
@@ -350,6 +382,12 @@ export class CmsPublicController {
     return { success: true, data };
   }
 
+  @Get('footer-categories')
+  async getPublicFooterCategories() {
+    const data = await this.cmsService.getPublicFooterCategories();
+    return { success: true, data };
+  }
+
   @Get('global-seo')
   async getGlobalSeo() {
     const data = await this.cmsService.getGlobalSeo();
@@ -363,9 +401,10 @@ export class CmsPublicController {
   }
 
   @Get('root-files/:filename')
-  async getRootFile(@Param('filename') filename: string) {
+  async getRootFile(@Param('filename') filename: string, @Res() res: Response) {
     const data = await this.cmsService.getRootFileByFilename(filename);
-    return { success: true, data };
+    res.setHeader('Content-Type', data.mimeType || 'text/plain');
+    res.send(data.content);
   }
 
   @Get('blogs')

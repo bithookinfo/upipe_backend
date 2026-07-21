@@ -188,6 +188,7 @@ export class CmsService {
     return this.prisma.cmsNavigation.findMany({
       where,
       orderBy: { order: 'asc' },
+      include: { footerCategory: true }
     });
   }
 
@@ -204,6 +205,7 @@ export class CmsService {
     const items = await this.prisma.cmsNavigation.findMany({
       where,
       orderBy: { order: 'asc' },
+      include: { footerCategory: true }
     });
 
     // Build tree structure (parent-child)
@@ -229,6 +231,46 @@ export class CmsService {
   async deleteNavigation(id: string) {
     await this.getNavigationById(id);
     return this.prisma.cmsNavigation.delete({ where: { id } });
+  }
+
+  // =============================================
+  // FOOTER CATEGORIES
+  // =============================================
+
+  async getFooterCategories() {
+    return this.prisma.cmsFooterCategory.findMany({
+      orderBy: { displayOrder: 'asc' },
+    });
+  }
+
+  async getPublicFooterCategories() {
+    return this.prisma.cmsFooterCategory.findMany({
+      where: { isActive: true },
+      orderBy: { displayOrder: 'asc' },
+    });
+  }
+
+  async getFooterCategoryById(id: string) {
+    const category = await this.prisma.cmsFooterCategory.findUnique({ where: { id } });
+    if (!category) throw new NotFoundException('Footer category not found');
+    return category;
+  }
+
+  async createFooterCategory(data: any) {
+    const { id, createdAt, updatedAt, ...catData } = data;
+    return this.prisma.cmsFooterCategory.create({ data: catData });
+  }
+
+  async updateFooterCategory(id: string, data: any) {
+    const { createdAt, updatedAt, ...catData } = data;
+    delete catData.id;
+    await this.getFooterCategoryById(id);
+    return this.prisma.cmsFooterCategory.update({ where: { id }, data: catData });
+  }
+
+  async deleteFooterCategory(id: string) {
+    await this.getFooterCategoryById(id);
+    return this.prisma.cmsFooterCategory.delete({ where: { id } });
   }
 
   // =============================================

@@ -422,6 +422,68 @@ async function main() {
   
   console.log('✅ CMS Navigation seeded (Home, FAQ, Contact Us)');
 
+  // 13. Footer Categories & Navigation
+  const legalCategory = await prisma.cmsFooterCategory.upsert({
+    where: { id: 'cat-legal' },
+    update: { name: 'Legal', displayOrder: 1 },
+    create: {
+      id: 'cat-legal',
+      name: 'Legal',
+      displayOrder: 1,
+    }
+  });
+
+  const supportCategory = await prisma.cmsFooterCategory.upsert({
+    where: { id: 'cat-support' },
+    update: { name: 'Support', displayOrder: 2 },
+    create: {
+      id: 'cat-support',
+      name: 'Support',
+      displayOrder: 2,
+    }
+  });
+
+  await prisma.cmsNavigation.upsert({
+    where: { id: 'nav-footer-terms' },
+    update: { url: '/terms', label: 'Terms & Conditions', footerCategoryId: legalCategory.id },
+    create: {
+      id: 'nav-footer-terms',
+      label: 'Terms & Conditions',
+      url: '/terms',
+      navType: 'footer',
+      footerCategoryId: legalCategory.id,
+      order: 1,
+    }
+  });
+
+  await prisma.cmsNavigation.upsert({
+    where: { id: 'nav-footer-privacy' },
+    update: { url: '/privacy', label: 'Privacy Policy', footerCategoryId: legalCategory.id },
+    create: {
+      id: 'nav-footer-privacy',
+      label: 'Privacy Policy',
+      url: '/privacy',
+      navType: 'footer',
+      footerCategoryId: legalCategory.id,
+      order: 2,
+    }
+  });
+
+  await prisma.cmsNavigation.upsert({
+    where: { id: 'nav-footer-contact' },
+    update: { url: '/contact', label: 'Contact Support', footerCategoryId: supportCategory.id },
+    create: {
+      id: 'nav-footer-contact',
+      label: 'Contact Support',
+      url: '/contact',
+      navType: 'footer',
+      footerCategoryId: supportCategory.id,
+      order: 1,
+    }
+  });
+
+  console.log('✅ CMS Footer Categories & Navigation seeded');
+
   console.log('\\n🎉 Comprehensive Upipe CMS seed complete!');
 }
 
