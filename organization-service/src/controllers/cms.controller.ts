@@ -360,15 +360,17 @@ export class CmsAdminController {
   }
 }
 
-// =============================================
-// PUBLIC CMS CONTROLLER (no auth required)
-// =============================================
-
 @Controller('cms/public')
 export class CmsPublicController {
   private readonly logger = new Logger(CmsPublicController.name);
 
   constructor(private readonly cmsService: CmsService) {}
+
+  @Get('pages')
+  async getPublishedPages() {
+    const data = await this.cmsService.getPublishedPages();
+    return { success: true, data };
+  }
 
   @Get('pages/:slug')
   async getPageBySlug(@Param('slug') slug: string) {

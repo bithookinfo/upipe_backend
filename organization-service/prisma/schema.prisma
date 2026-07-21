@@ -279,6 +279,8 @@ model CmsPage {
   canonicalUrl   String?      @map("canonical_url") @db.VarChar(500)
   headHtml       String?      @map("head_html") @db.LongText
   bodyHtml       String?      @map("body_html") @db.LongText
+  seoIndex       Boolean      @default(true) @map("seo_index")
+  seoFollow      Boolean      @default(true) @map("seo_follow")
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @updatedAt @map("updated_at")
   sections       CmsSection[]

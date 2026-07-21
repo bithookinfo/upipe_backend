@@ -25,6 +25,13 @@ export class CmsService {
     }));
   }
 
+  async getPublishedPages() {
+    return this.prisma.cmsPage.findMany({
+      where: { status: { in: ['published', 'Published'] } },
+      select: { slug: true, url: true, updatedAt: true, seoIndex: true }
+    });
+  }
+
   async getPageById(id: string) {
     const page = await this.prisma.cmsPage.findUnique({
       where: { id },
@@ -45,7 +52,7 @@ export class CmsService {
       where: { slug },
       include: { sections: { where: { isVisible: true }, orderBy: { order: 'asc' } } },
     });
-    if (!page || page.status !== 'published') throw new NotFoundException('Page not found');
+    if (!page || page.status?.toLowerCase() !== 'published') throw new NotFoundException('Page not found');
     return {
       ...page,
       sections: page.sections.map(s => ({
