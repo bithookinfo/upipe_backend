@@ -894,19 +894,69 @@ export class OrdersService {
             }
           }
 
-          if (
-            subscription.currentUsage &&
-            subscription.limits?.maxTransactions
-          ) {
-            const current = subscription.currentUsage.transactionsCount || 0;
+          if (subscription.limits?.maxTransactions) {
+            let current = 0;
             const max = subscription.limits.maxTransactions;
-            if (max > 0 && current >= max) {
-              console.log(`❌ Transaction limit reached: ${current}/${max}`);
-              return {
-                code: 4000,
-                status: false,
-                msg: `Transaction limit reached (${current}/${max}). Please upgrade your plan to continue.`,
-              };
+            if (max > 0) {
+              const billingCycleStart = new Date(subscription.startDate);
+              let billingCycleEnd = subscription.endDate ? new Date(subscription.endDate) : new Date();
+              if (!subscription.endDate && subscription.nextBillingAt) {
+                billingCycleEnd = new Date(subscription.nextBillingAt);
+              }
+
+              current = await this.prisma.order.count({
+                where: {
+                  organizationId,
+                  createdAt: { gte: billingCycleStart, lte: billingCycleEnd },
+                  NOT: [{ metadata: { path: '$.isPlatform', equals: true } }]
+                }
+              });
+
+              if (current >= max) {
+                console.log(`❌ Transaction limit reached: ${current}/${max}`);
+                return {
+                  code: 4000,
+                  status: false,
+                  msg: `Transaction limit reached (${current}/${max}). Please upgrade your plan to continue.`,
+                };
+              }
+
+              const pct = Math.floor((current / max) * 100);
+              let milestone = null;
+              if (pct === 70 || pct === 80 || pct === 90) {
+                milestone = pct;
+              }
+
+              if (milestone) {
+                // Try sending alert asynchronously
+                try {
+                  const notifUrl = process.env.NOTIFICATION_SERVICE_URL;
+                  const orgUrl = process.env.ORGANIZATION_SERVICE_URL;
+                  const axios = require("axios");
+                  
+                  // Fetch org to get email
+                  const orgResp = await axios.get(`${orgUrl}/organizations/${organizationId}`, {
+                    headers: { "x-internal-token": process.env.INTERNAL_TOKEN }
+                  });
+                  const orgData = orgResp.data;
+                  const orgEmail = orgData?.contactEmail || orgData?.email;
+
+                  if (orgEmail && notifUrl) {
+                    await axios.post(`${notifUrl}/internal/send/email`, {
+                      to: orgEmail,
+                      type: "usage_alert",
+                      data: {
+                        orgName: orgData.name,
+                        milestone,
+                        currentUsage: current,
+                        maxLimit: max
+                      }
+                    }, { headers: { "x-internal-token": process.env.INTERNAL_TOKEN } }).catch((e: any) => console.log("Failed to send usage alert:", e.message));
+                  }
+                } catch (e) {
+                  console.error("Error triggering usage alert:", e.message);
+                }
+              }
             }
           }
 

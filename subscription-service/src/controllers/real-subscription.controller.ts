@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Query, OnModuleInit, Headers, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, Query, OnModuleInit, Headers, ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from '@nestjs/swagger';
 import { RealSubscriptionService } from '../services/real-subscription.service';
 
@@ -146,6 +146,21 @@ export class RealSubscriptionController implements OnModuleInit {
   ) {
     this.validateAccess(organizationId, reqOrgId, isSuperAdmin, userType);
     return this.realSubscriptionService.unassignSlot(body.merchantId);
+  }
+
+  @Delete('organizations/:organizationId/slots/:slotId')
+  @ApiOperation({ summary: 'Delete a subscription slot manually' })
+  @ApiParam({ name: 'organizationId', description: 'Organization ID' })
+  @ApiParam({ name: 'slotId', description: 'Slot ID to delete' })
+  async deleteSlot(
+    @Param('organizationId') organizationId: string,
+    @Param('slotId') slotId: string,
+    @Headers('x-organization-id') reqOrgId?: string,
+    @Headers('x-user-type') userType?: string,
+    @Headers('x-is-super-admin') isSuperAdmin?: string
+  ) {
+    this.validateAccess(organizationId, reqOrgId, isSuperAdmin, userType);
+    return this.realSubscriptionService.deleteSlot(slotId);
   }
 
   // ─── PROVIDER ACCESS ───────────────────────────────────────

@@ -32,6 +32,7 @@ import { StatsController } from "./stats/stats.controller";
 import { MerchantsController } from "./controllers/merchants.controller";
 import { RoutingController } from "./modules/routing/routing.controller";
 import { RoutingService } from "./modules/routing/routing.service";
+import { PlatformMerchantExpiryCron } from "./modules/merchant/platform-merchant-expiry.cron";
 import { GpayModule } from "./modules/gpay/gpay.module";
 
 @Module({
@@ -76,6 +77,7 @@ import { GpayModule } from "./modules/gpay/gpay.module";
     PrismaService,
     OrderStatusCronService,
     RoutingService,
+    PlatformMerchantExpiryCron,
   ],
   exports: [
     MerchantService,

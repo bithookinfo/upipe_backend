@@ -203,19 +203,23 @@ export class RealSubscriptionService {
   private computeEndDate(startDate: Date, billingCycle: string, durationDays?: number | null): Date {
     const ms = startDate.getTime();
     const DAY = 24 * 60 * 60 * 1000;
+    let endDate: Date;
 
     if (durationDays && durationDays > 0) {
-      return new Date(ms + durationDays * DAY);
+      endDate = new Date(ms + durationDays * DAY);
+    } else {
+      switch (billingCycle) {
+        case "MONTHLY": endDate = new Date(ms + 28 * DAY); break;
+        case "QUARTERLY": endDate = new Date(ms + 84 * DAY); break;
+        case "HALF_YEARLY": endDate = new Date(ms + 180 * DAY); break;
+        case "YEARLY": endDate = new Date(ms + 365 * DAY); break;
+        case "LIFETIME": endDate = new Date(ms + 100 * 365 * DAY); break;
+        default: endDate = new Date(ms + 28 * DAY); break;
+      }
     }
 
-    switch (billingCycle) {
-      case "MONTHLY": return new Date(ms + 28 * DAY);
-      case "QUARTERLY": return new Date(ms + 84 * DAY);
-      case "HALF_YEARLY": return new Date(ms + 180 * DAY);
-      case "YEARLY": return new Date(ms + 365 * DAY);
-      case "LIFETIME": return new Date(ms + 100 * 365 * DAY);
-      default: return new Date(ms + 28 * DAY);
-    }
+    endDate.setHours(23, 59, 59, 999);
+    return endDate;
   }
 
   async initiatePurchase(organizationId: string, planId: string, quantity: number) {
@@ -592,6 +596,19 @@ export class RealSubscriptionService {
     }
 
     return { success: true, freedCount: result.count };
+  }
+
+  async deleteSlot(slotId: string) {
+    try {
+      await this.prisma.orgSubscription.delete({
+        where: { id: slotId },
+      });
+      this.logger.log(`🗑️ Deleted slot ${slotId}`);
+      return { success: true, message: "Slot deleted successfully" };
+    } catch (error) {
+      this.logger.error(`Failed to delete slot ${slotId}:`, error);
+      throw new BadRequestException("Failed to delete slot. It may not exist.");
+    }
   }
 
   // ─── PURCHASE HISTORY ───────────────────────────────────────
@@ -1112,19 +1129,18 @@ export class RealSubscriptionService {
   async expireSlots() {
     try {
       const now = new Date();
-      const result = await this.prisma.orgSubscription.updateMany({
+      const result = await this.prisma.orgSubscription.deleteMany({
         where: {
-          status: { in: ["ACTIVE", "UNASSIGNED"] },
+          status: { in: ["ACTIVE", "UNASSIGNED", "EXPIRED"] },
           endDate: { lt: now, not: null },
         },
-        data: { status: "EXPIRED" },
       });
 
       if (result.count > 0) {
-        this.logger.log(`⏰ Expired ${result.count} subscription slot(s)`);
+        this.logger.log(`⏰ Automatically deleted ${result.count} expired subscription slot(s)`);
       }
     } catch (error) {
-      this.logger.error("Failed to expire slots:", error);
+      this.logger.error("Failed to delete expired slots:", error);
     }
   }
 
