@@ -24,6 +24,12 @@ export class PermissionGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest();
     
+    const userType = request.user?.userType || request.headers['x-user-type'];
+    const isSuperAdmin = userType?.toLowerCase() === 'super_admin' || request.headers['x-is-super-admin'] === 'true' || request.user?.role === 'super_admin';
+    if (isSuperAdmin) {
+      return true;
+    }
+
     const userId = request.user?.sub || request.headers['x-user-id'];
     const organizationId = request.params?.organizationId || request.headers['x-organization-id'];
 

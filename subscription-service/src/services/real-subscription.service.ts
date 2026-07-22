@@ -989,7 +989,11 @@ export class RealSubscriptionService {
   async updateSlotDates(slotId: string, startDate?: string, endDate?: string, planId?: string, status?: string, autoRenew?: boolean) {
     const data: any = {};
     if (startDate) data.startDate = new Date(startDate);
-    if (endDate) data.endDate = new Date(endDate);
+    if (endDate) {
+      const ed = new Date(endDate);
+      ed.setHours(23, 59, 59, 999);
+      data.endDate = ed;
+    }
     if (planId) data.planId = planId;
     if (status) data.status = status;
     if (autoRenew !== undefined) data.autoRenew = autoRenew;
@@ -1190,7 +1194,7 @@ export class RealSubscriptionService {
 
       const notificationServiceUrl = process.env.NOTIFICATION_SERVICE_URL;
       const orgServiceUrl = process.env.ORGANIZATION_SERVICE_URL;
-      const identityServiceUrl = process.env.IDENTITY_SERVICE_URL || 'http://127.0.0.1:4001';
+      const identityServiceUrl = process.env.IDENTITY_SERVICE_URL;
       const frontendUrl = process.env.FRONTEND_URL;
       const supportEmail = process.env.SUPPORT_EMAIL;
       const supportPhone = process.env.SUPPORT_PHONE;
@@ -1265,9 +1269,9 @@ export class RealSubscriptionService {
       const orgServiceUrl = process.env.ORGANIZATION_SERVICE_URL;
       const notificationServiceUrl = process.env.NOTIFICATION_SERVICE_URL;
       const frontendUrl = process.env.FRONTEND_URL;
-      const supportEmail = process.env.SUPPORT_EMAIL || 'support@upipe.in';
-      const supportPhone = process.env.SUPPORT_PHONE || '+91-XXXXXXXXXX';
-      const identityServiceUrl = process.env.IDENTITY_SERVICE_URL || 'http://127.0.0.1:4001';
+      const supportEmail = process.env.SUPPORT_EMAIL;
+      const supportPhone = process.env.SUPPORT_PHONE;
+      const identityServiceUrl = process.env.IDENTITY_SERVICE_URL;
 
       // Fetch dynamic BCC email from identity-service (primary superadmin)
       let bccEmail: string | undefined = undefined;
@@ -1281,8 +1285,9 @@ export class RealSubscriptionService {
       }
 
       const orgResponse = await axios.get(`${orgServiceUrl}/organizations/${organizationId}`, { headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": organizationId } });
-      const adminEmail = orgResponse.data?.ownerEmail || orgResponse.data?.email;
-      const orgName = orgResponse.data?.name || 'Your Organization';
+      const orgData = orgResponse.data?.data?.organization || orgResponse.data?.organization || orgResponse.data;
+      const adminEmail = orgData?.ownerEmail || orgData?.email;
+      const orgName = orgData?.name;
 
       if (!adminEmail) {
         throw new BadRequestException("Organization has no admin email");
@@ -1301,7 +1306,7 @@ export class RealSubscriptionService {
         }
       }
 
-      if (type === 'expiry') {
+      if (type.toLowerCase() === 'expiry') {
         await axios.post(`${notificationServiceUrl}/internal/send/email`, {
           to: adminEmail,
           bcc: bccEmail,
@@ -1317,7 +1322,7 @@ export class RealSubscriptionService {
             supportPhone,
           },
         }, { headers: { "x-internal-token": process.env.INTERNAL_TOKEN } });
-      } else if (type === 'renewal') {
+      } else if (type.toLowerCase() === 'renewal') {
         await axios.post(`${notificationServiceUrl}/internal/send/email`, {
           to: adminEmail,
           bcc: bccEmail,
