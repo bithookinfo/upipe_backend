@@ -16,11 +16,17 @@ export class SuperAdminGuard implements CanActivate {
         const userType = request.headers['x-user-type'];
         const userRole = request.headers['x-user-role'];
 
-        // Allow super_admin user type (they will have specific roles/permissions handled at the controller level if needed)
-        const isSuperAdmin = userType === 'super_admin';
+        // Allow super_admin user type or valid internal calls
+        const internalToken = request.headers['x-internal-token'];
+        const isInternalCall = internalToken && process.env.INTERNAL_TOKEN && internalToken === process.env.INTERNAL_TOKEN;
+        const isSuperAdmin = isInternalCall || (userType && (userType.toLowerCase() === 'super_admin' || userType.toLowerCase() === 'superadmin'));
 
         if (!isSuperAdmin) {
             throw new UnauthorizedException('Super admin access required');
+        }
+
+        if (isInternalCall) {
+            return true;
         }
 
         const requiredPermissions = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [

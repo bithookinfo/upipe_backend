@@ -32,11 +32,10 @@ export class PlatformMerchantExpiryCron {
       if (expiredProviders.length === 0) return;
 
       const notifUrl = process.env.NOTIFICATION_SERVICE_URL;
-      if (!notifUrl) return;
 
       let superAdminEmails: string[] = [];
       try {
-        const identityUrl = process.env.USER_SERVICE_URL; 
+        const identityUrl = process.env.IDENTITY_SERVICE_URL;
         if (identityUrl) {
           const adminsRes = await axios.get(`${identityUrl}/super-admins`, {
             headers: { 
@@ -71,7 +70,7 @@ export class PlatformMerchantExpiryCron {
           this.logger.log(`🚨 Sending expiration alert for platform merchant provider ${provider.id} to ${superAdminEmails.join(', ')}`);
           
           await axios.post(`${notifUrl}/internal/send/email`, {
-            to: superAdminEmails,
+            to: superAdminEmails.join(","),
             type: "security_alert", // use security_alert or create a new one, security_alert works for admin notifications
             data: {
               organizationName: "SuperAdmin Platform",

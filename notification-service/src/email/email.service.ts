@@ -155,8 +155,9 @@ export class EmailService {
           html,
           text: html.replace(/<[^>]*>/g, ""), // fallback plain text
         });
+        const toStr = Array.isArray(to) ? to.join(",") : String(to || "");
         this.logger.log(
-          `Email sent: ${type} to ${to.replace(/(.{2}).*(@.*)/, "$1***$2")}`,
+          `Email sent: ${type} to ${toStr.replace(/(.{2}).*(@.*)/, "$1***$2")}`,
         );
         return { success: true };
       } catch (err: any) {
