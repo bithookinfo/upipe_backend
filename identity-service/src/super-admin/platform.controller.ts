@@ -241,7 +241,10 @@ export class PlatformController {
     ) {
         try {
             const orgServiceUrl = this.configService.get('ORGANIZATION_SERVICE_URL');
-            const response = await axios.get(`${orgServiceUrl}/audit-logs${organizationId ? `/${organizationId}` : '/recent'}`, {
+            const url = organizationId 
+                ? `${orgServiceUrl}/organizations/${organizationId}/audit-logs`
+                : `${orgServiceUrl}/audit-logs/recent`;
+            const response = await axios.get(url, {
                 params: { limit, offset, action },
                 timeout: 5000,
                 headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-user-type": "SUPER_ADMIN", "x-is-super-admin": "true" }
