@@ -1692,4 +1692,43 @@ export class MerchantService {
       throw new InternalServerErrorException("Failed to delete merchant");
     }
   }
+
+  async validateDuplicateMerchantConnection(accountIdentifier: string, providerType: string, currentOrganizationId: string) {
+    if (!accountIdentifier || !currentOrganizationId) return;
+    
+    const normalizedIdentifier = accountIdentifier.trim().toLowerCase();
+
+    const existingProviders = await this.prisma.merchantProvider.findMany({
+      where: {
+        providerType: providerType as any,
+        isActive: true,
+      },
+      include: {
+        merchant: true
+      }
+    });
+
+    const existing = existingProviders.find(p => 
+      (p.accountIdentifier || "").toLowerCase() === normalizedIdentifier && 
+      p.merchant.organizationId !== currentOrganizationId
+    );
+
+    if (existing) {
+      let orgName = existing.merchant.organizationId;
+      try {
+         const axios = require("axios");
+         const orgUrl = process.env.ORGANIZATION_SERVICE_URL || 'http://localhost:3002';
+         const orgRes = await axios.get(`${orgUrl}/internal/organizations/${existing.merchant.organizationId}`, {
+             headers: { "x-internal-token": process.env.INTERNAL_TOKEN }
+         });
+         if (orgRes.data?.organization?.name) {
+             orgName = orgRes.data.organization.name;
+         }
+      } catch (err) {
+         this.logger.warn(`Failed to fetch organization details for ${existing.merchant.organizationId}`);
+      }
+      
+      throw new Error(`This merchant is already connected to another organization. Organization: ${orgName}, Merchant: ${existing.merchant.name}`);
+    }
+  }
 }
