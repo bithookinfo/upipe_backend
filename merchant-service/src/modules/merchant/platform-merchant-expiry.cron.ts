@@ -49,7 +49,10 @@ export class PlatformMerchantExpiryCron {
           });
 
           if (adminsRes?.data && Array.isArray(adminsRes.data)) {
-            superAdminEmails = adminsRes.data.map((admin: any) => admin.email).filter(Boolean);
+            superAdminEmails = adminsRes.data
+              .filter((admin: any) => admin.role === 'super_admin')
+              .map((admin: any) => admin.email)
+              .filter(Boolean);
           }
         }
       } catch (err) {
