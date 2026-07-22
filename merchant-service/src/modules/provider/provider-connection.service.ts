@@ -1357,7 +1357,7 @@ export class ProviderConnectionService {
       }
 
       // Check Provider Limits first
-      await this.checkProviderLimit(data.organizationId, "PAYTM");
+      await this.checkProviderLimit(data.organizationId, "PAYTM", data.isSuperAdmin);
 
       const paytmCredMatch = (cred: any) => {
         const u = (data.username || "").trim();
@@ -1620,8 +1620,18 @@ export class ProviderConnectionService {
         `📅 Syncing transactions from ${elevenMonthsAgo.toISOString()} to ${now.toISOString()}`,
       );
 
+      const merchant = await this.prisma.merchant.findUnique({
+        where: { id: merchantId },
+        select: { organizationId: true }
+      });
+      if (!merchant) {
+        this.logger.error(`❌ Background sync failed: Merchant ${merchantId} not found`);
+        return;
+      }
+
       const result = await transactionService.syncAllTransactions(
         merchantId,
+        merchant.organizationId,
         elevenMonthsAgo,
         now,
       );
@@ -1767,7 +1777,7 @@ export class ProviderConnectionService {
         this.logger.warn(`Could not fetch organization name for ID ${existing.merchant.organizationId}: ${error.message}`);
       }
 
-      const orgString = orgName ? ` in organization "${orgName}"` : "";
+      const orgString = orgName ? ` in organization "${orgName}"` : ` in organization "Unknown"`;
       throw new BadRequestException(
         `This ${providerType} account (${accountIdentifier}) is already connected to merchant "${existing.merchant.name}"${orgString}.`,
       );
@@ -2074,7 +2084,7 @@ export class ProviderConnectionService {
       }
 
       // Step 4: Check subscription limits
-      await this.checkProviderLimit(data.organizationId, "bharatpe");
+      await this.checkProviderLimit(data.organizationId, "bharatpe", data.isSuperAdmin);
 
       // Prefer stable UPI VPA as identifier; fall back to phone number
       const accountIdentifier = upiId || data.phoneNumber;
@@ -2279,7 +2289,7 @@ export class ProviderConnectionService {
         verifyResult.accessToken,
       );
 
-      await this.checkProviderLimit(data.organizationId, "quintus");
+      await this.checkProviderLimit(data.organizationId, "quintus", data.isSuperAdmin);
 
       const accountIdentifier = upiId || data.phoneNumber;
       
@@ -2488,7 +2498,7 @@ export class ProviderConnectionService {
 
     try {
       // Check limits
-      await this.checkProviderLimit(data.organizationId, "hdfc");
+      await this.checkProviderLimit(data.organizationId, "hdfc", data.isSuperAdmin);
 
       // Verify OTP
       const verifyResult = await this.hdfcVyaparService.verifyOtp(

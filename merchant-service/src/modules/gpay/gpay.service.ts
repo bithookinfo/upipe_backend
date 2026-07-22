@@ -583,6 +583,36 @@ export class GpayService implements OnModuleDestroy {
         if (data.googleVerificationCode) {
           (session as any).googleVerificationCode = data.googleVerificationCode;
         }
+
+        // Retry password if stuck on resumed session
+        try {
+          const urlNow = page.url();
+          if (urlNow.includes("challenge/pwd")) {
+            const contentNow = await page.content().catch(() => "");
+            if (contentNow.includes("Enter your password") || contentNow.includes("Show password")) {
+              this.logger.log("⚠️ Resumed session is still on password page. Retrying password entry...");
+              await page.waitForSelector('input[type="password"]', { timeout: 5000 });
+              await page.focus('input[type="password"]');
+              await page.evaluate(() => {
+                const el = document.querySelector('input[type="password"]') as HTMLInputElement;
+                if (el) el.value = '';
+              });
+              await new Promise((r) => setTimeout(r, 500));
+              for (const char of data.password) {
+                await page.type('input[type="password"]', char, { delay: 40 + Math.floor(Math.random() * 60) });
+              }
+              await new Promise((r) => setTimeout(r, 700));
+              const nextBtn = await page.$('#passwordNext button, button:has-text("Next")');
+              if (nextBtn) {
+                await nextBtn.click();
+              } else {
+                await page.keyboard.press("Enter");
+              }
+            }
+          }
+        } catch (e) {
+          this.logger.warn("Retry password failed:", e);
+        }
       }
 
       // Check for challenges (Wait for Google to settle - page may still be navigating after password submit)
@@ -922,10 +952,16 @@ export class GpayService implements OnModuleDestroy {
         };
       }
 
+      const finalUrl = page.url();
+      let waitingMessage = "Logged in successfully, but still waiting for GPay dashboard to load. Please click 'Next' again in a moment.";
+      if (finalUrl.includes("challenge/pwd") || finalUrl.includes("signin")) {
+        waitingMessage = "Still waiting for Google sign-in step to complete. Google might be loading or password may be incorrect. Please click 'Next' again in a moment.";
+      }
+
       return {
         success: false,
         status: "WAITING",
-        message: "Logged in successfully, but still waiting for GPay dashboard to load. Please click 'Next' again in a moment.",
+        message: waitingMessage,
         sessionId,
       };
 
