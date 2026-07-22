@@ -986,13 +986,16 @@ export class RealSubscriptionService {
     return { success: true, slotsCreated: slots.length, purchaseId };
   }
 
-  async updateSlotDates(slotId: string, startDate?: string, endDate?: string) {
+  async updateSlotDates(slotId: string, startDate?: string, endDate?: string, planId?: string, status?: string, autoRenew?: boolean) {
     const data: any = {};
     if (startDate) data.startDate = new Date(startDate);
     if (endDate) data.endDate = new Date(endDate);
+    if (planId) data.planId = planId;
+    if (status) data.status = status;
+    if (autoRenew !== undefined) data.autoRenew = autoRenew;
 
     if (Object.keys(data).length === 0) {
-      return { success: false, message: 'No dates provided' };
+      return { success: false, message: 'No update data provided' };
     }
 
     const slot = await this.prisma.orgSubscription.update({
@@ -1002,7 +1005,7 @@ export class RealSubscriptionService {
 
     // Check if status needs to be updated based on new endDate
     const now = new Date();
-    if (data.endDate) {
+    if (data.endDate && !status) {
       if (data.endDate < now && slot.status !== 'EXPIRED') {
         await this.prisma.orgSubscription.update({
           where: { id: slotId },

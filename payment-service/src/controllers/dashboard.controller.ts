@@ -1143,14 +1143,14 @@ export class DashboardController {
     @Query("timeRange") timeRange: string = "7d",
     @Query("fromDate") fromDate?: string,
     @Query("toDate") toDate?: string,
-    @Query("limit") limit: string = "10",
+    @Query("limit") limit: string = "20",
   ) {
     return this.dashboardService.getMerchantPerformance(
       timeRange,
       fromDate,
       toDate,
       organizationId,
-      parseInt(limit, 10) || 10,
+      parseInt(limit, 10) || 20,
     );
   }
 

@@ -158,6 +158,42 @@ export class StatsController {
         return { success: true, data: months };
     }
 
+    @Get('hourly-trend')
+    async getHourlyTrend(
+        @Query('date') dateParam?: string,
+    ) {
+        const targetDate = dateParam ? new Date(dateParam) : new Date();
+        targetDate.setHours(0, 0, 0, 0);
+        
+        const data = [];
+        
+        for (let i = 0; i < 24; i++) {
+            const hourStart = new Date(targetDate);
+            hourStart.setHours(i, 0, 0, 0);
+            
+            const hourEnd = new Date(targetDate);
+            hourEnd.setHours(i, 59, 59, 999);
+            
+            const volume = await this.prisma.order.aggregate({
+                _sum: { amount: true },
+                where: {
+                    status: 'COMPLETED',
+                    createdAt: { gte: hourStart, lte: hourEnd }
+                }
+            });
+            
+            const ampm = i >= 12 ? 'PM' : 'AM';
+            const hourLabel = i % 12 === 0 ? 12 : i % 12;
+            
+            data.push({
+                name: `${hourLabel} ${ampm}`,
+                volume: Number(volume._sum.amount || 0)
+            });
+        }
+        
+        return { success: true, data };
+    }
+
     @Get('volume-trend')
     async getVolumeTrend(
         @Query('fromDate') fromDate?: string,

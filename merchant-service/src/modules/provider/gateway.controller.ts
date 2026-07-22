@@ -25,6 +25,8 @@ import { GpayService } from "../gpay/gpay.service";
 import { TransactionService } from "../transaction/transaction.service";
 import { PhonePeSimpleService } from "./phonepe-simple.service";
 
+import { MerchantService } from "../merchant/merchant.service";
+
 @ApiTags("Gateway")
 @Controller("gateway")
 export class GatewayController {
@@ -39,6 +41,7 @@ export class GatewayController {
     private readonly gpayService: GpayService,
     private readonly transactionService: TransactionService,
     private readonly phonepeSimpleService: PhonePeSimpleService,
+    private readonly merchantService: MerchantService,
   ) { }
 
   @Get("gpay/metrics")
@@ -562,6 +565,9 @@ export class GatewayController {
       googleVerificationCode?: string;
     },
   ) {
+    if (body.username && body.organizationId) {
+      await this.merchantService.validateDuplicateMerchantConnection(body.username, "GPAY", body.organizationId);
+    }
     this.logger.log(`🟢 Connecting GPay for: ${body.username} (UPI: ${body.upiId || 'not provided'})`);
 
     if (providerId.toLowerCase() !== "gpay") {

@@ -234,7 +234,7 @@ export class SubscriptionAssignmentController {
     @ApiOperation({ summary: 'Edit specific slot dates' })
     async updateSlotDates(
         @Param('id') id: string,
-        @Body() body: { startDate?: string; endDate?: string },
+        @Body() body: { startDate?: string; endDate?: string; planId?: string; status?: string; autoRenew?: boolean },
         @Headers('x-user-type') userType?: string,
         @Headers('x-user-id') userId?: string,
         @Headers("user-agent") userAgent?: string,
@@ -242,7 +242,7 @@ export class SubscriptionAssignmentController {
         @Headers('x-is-super-admin') isSuperAdmin?: string
     ) {
         this.validateSuperAdmin(isSuperAdmin, userType);
-        const result = await this.subscriptionService.updateSlotDates(id, body.startDate, body.endDate);
+        const result = await this.subscriptionService.updateSlotDates(id, body.startDate, body.endDate, body.planId, body.status, body.autoRenew);
 
         if (userId && result?.slot?.organizationId) {
             await logAuditActivity(

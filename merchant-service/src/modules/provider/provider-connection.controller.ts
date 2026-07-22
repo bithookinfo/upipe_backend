@@ -2,11 +2,12 @@ import { Controller, Post, Get, Delete, Body, Param, Headers, Ip } from "@nestjs
 import { logAuditActivity } from "../../utils/audit.util";
 import { ApiTags, ApiOperation, ApiResponse, ApiParam } from "@nestjs/swagger";
 import { ProviderConnectionService } from "./provider-connection.service";
+import { MerchantService } from "../merchant/merchant.service";
 
 @ApiTags("Provider Connections")
 @Controller("merchants/:merchantId/providers")
 export class ProviderConnectionController {
-  constructor(private readonly providerService: ProviderConnectionService) {}
+  constructor(private readonly providerService: ProviderConnectionService, private readonly merchantService: MerchantService) {}
 
   @Post("phonepe/send-otp")
   @ApiOperation({
@@ -21,7 +22,11 @@ export class ProviderConnectionController {
     body: {
       phoneNumber: string;
     },
+    @Headers("x-organization-id") organizationId?: string,
   ) {
+    if (body.phoneNumber && organizationId) {
+      await this.merchantService.validateDuplicateMerchantConnection(body.phoneNumber, "PHONEPE", organizationId);
+    }
     return this.providerService.sendPhonePeOtp(merchantId, body.phoneNumber);
   }
 
@@ -75,6 +80,9 @@ export class ProviderConnectionController {
     @Headers("user-agent") userAgent?: string,
     @Ip() ipAddress?: string,
   ) {
+    if (body.email && organizationId) {
+      await this.merchantService.validateDuplicateMerchantConnection(body.email, "GPAY", organizationId);
+    }
     const result = await this.providerService.connectGPay(merchantId, body);
     if (userId && organizationId) {
       await logAuditActivity("PROVIDER_CONNECTED", merchantId, "MERCHANT", userId, userType || "USER", organizationId, ipAddress, userAgent, { providerType: "GPay" });
@@ -96,7 +104,11 @@ export class ProviderConnectionController {
       username: string;
       password: string;
     },
+    @Headers("x-organization-id") organizationId?: string,
   ) {
+    if (body.username && organizationId) {
+      await this.merchantService.validateDuplicateMerchantConnection(body.username, "PAYTM", organizationId);
+    }
     return this.providerService.sendPaytmOtp(
       merchantId,
       body.username,
@@ -146,7 +158,11 @@ export class ProviderConnectionController {
     body: {
       phoneNumber: string;
     },
+    @Headers("x-organization-id") organizationId?: string,
   ) {
+    if (body.phoneNumber && organizationId) {
+      await this.merchantService.validateDuplicateMerchantConnection(body.phoneNumber, "QUINTUS", organizationId);
+    }
     return this.providerService.sendQuintusOtp(merchantId, body.phoneNumber);
   }
 
@@ -190,7 +206,11 @@ export class ProviderConnectionController {
     body: {
       phoneNumber: string;
     },
+    @Headers("x-organization-id") organizationId?: string,
   ) {
+    if (body.phoneNumber && organizationId) {
+      await this.merchantService.validateDuplicateMerchantConnection(body.phoneNumber, "HDFC", organizationId);
+    }
     return this.providerService.sendHdfcOtp(merchantId, body.phoneNumber);
   }
 
