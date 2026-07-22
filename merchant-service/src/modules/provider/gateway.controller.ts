@@ -404,6 +404,7 @@ export class GatewayController {
           otp: body.otp,
           sessionId: body.sessionId || "",
           organizationId: body.organizationId,
+          isSuperAdmin,
         });
       case "bharatpe":
         if (!body.organizationId) {
@@ -417,6 +418,7 @@ export class GatewayController {
           uuid: (body as any).uuid || "",
           tokens: (body as any).tokens || {},
           organizationId: body.organizationId,
+          isSuperAdmin,
         });
       case "quintus":
       case "quintuspay":
@@ -427,6 +429,7 @@ export class GatewayController {
           phoneNumber: body.phoneNumber || "",
           otp: body.otp,
           organizationId: body.organizationId,
+          isSuperAdmin,
         });
       case "hdfc":
         if (!body.organizationId) {
@@ -439,6 +442,7 @@ export class GatewayController {
           sessionId: body.sessionId || "",
           deviceId: body.deviceId || body.deviceFingerprint || "",
           organizationId: body.organizationId,
+          isSuperAdmin,
         });
       default:
         return {
