@@ -39,7 +39,7 @@ async function main() {
             isPublic: true,
             isFeatured: false,
             isTrial: true,
-            sortOrder: 0,
+            sortOrder: 1,
         },
         // ── Monthly Plans ──
         {
@@ -58,7 +58,7 @@ async function main() {
             isActive: true,
             isPublic: true,
             isFeatured: false,
-            sortOrder: 10,
+            sortOrder: 2,
         },
         {
             name: 'Startup',
@@ -76,7 +76,7 @@ async function main() {
             isActive: true,
             isPublic: true,
             isFeatured: false,
-            sortOrder: 20,
+            sortOrder: 3,
         },
         {
             name: 'Business',
@@ -94,7 +94,7 @@ async function main() {
             isActive: true,
             isPublic: true,
             isFeatured: true,
-            sortOrder: 30,
+            sortOrder: 4,
         },
         {
             name: 'Business +',
@@ -112,7 +112,7 @@ async function main() {
             isActive: true,
             isPublic: true,
             isFeatured: false,
-            sortOrder: 40,
+            sortOrder: 5,
         },
 
         // ── Quarterly Plans (10% more requests) ──
@@ -132,7 +132,7 @@ async function main() {
             isActive: true,
             isPublic: true,
             isFeatured: false,
-            sortOrder: 50,
+            sortOrder: 6,
         },
         {
             name: 'Startup',
@@ -150,7 +150,7 @@ async function main() {
             isActive: true,
             isPublic: true,
             isFeatured: false,
-            sortOrder: 60,
+            sortOrder: 7,
         },
         {
             name: 'Business',
@@ -168,7 +168,7 @@ async function main() {
             isActive: true,
             isPublic: true,
             isFeatured: true,
-            sortOrder: 70,
+            sortOrder: 8,
         },
         {
             name: 'Business +',
@@ -186,7 +186,7 @@ async function main() {
             isActive: true,
             isPublic: true,
             isFeatured: false,
-            sortOrder: 80,
+            sortOrder: 9,
         },
     ];
 
@@ -213,7 +213,13 @@ async function main() {
         const plan = await prisma.subscriptionPlan.findUnique({ where: { code: access.planCode } });
         if (!plan) continue;
 
-        for (const providerCode of access.providers) {
+        const totalMerchants = plan.maxMerchants;
+        const baseSlots = Math.floor(totalMerchants / access.providers.length);
+        let remainder = totalMerchants % access.providers.length;
+
+        for (const [index, providerCode] of access.providers.entries()) {
+            const slotsCount = baseSlots + (index < remainder ? 1 : 0);
+
             await prisma.subscriptionProviderAccess.upsert({
                 where: {
                     planId_providerCode: {
@@ -223,11 +229,13 @@ async function main() {
                 },
                 update: {
                     isIncluded: true,
+                    slotsCount,
                 },
                 create: {
                     planId: plan.id,
                     providerCode,
                     isIncluded: true,
+                    slotsCount,
                 },
             });
         }
