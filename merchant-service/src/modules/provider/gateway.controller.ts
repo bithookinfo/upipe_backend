@@ -197,13 +197,15 @@ export class GatewayController {
       username?: string;
       password?: string;
       organizationId?: string;
+      isSuperAdmin?: boolean;
     },
     @Req() req: any,
   ) {
-    const userType = req.headers["x-user-type"];
-    const isSuperAdmin = userType === "super_admin";
+    const userType = req.headers["x-user-type"] as string | undefined;
+    const isSuperAdmin = body.isSuperAdmin === true || 
+      (userType && (userType.toUpperCase() === "SUPER_ADMIN" || userType.toUpperCase() === "SUPERADMIN"));
 
-    this.logger.log(`📱 Sending OTP for provider: ${providerId}`);
+    this.logger.log(`📱 Sending OTP for provider: ${providerId} (isSuperAdmin: ${isSuperAdmin})`);
 
     if (!body.phoneNumber && body.username && /^[6-9]\d{9}$/.test(body.username)) {
       this.logger.log(`🔄 Using username "${body.username}" as phoneNumber`);
@@ -359,13 +361,15 @@ export class GatewayController {
       mPin?: string;
       method?: string;
       organizationId?: string;
+      isSuperAdmin?: boolean;
     },
     @Req() req: any,
   ) {
     this.logger.log(`✅ Verifying OTP for provider: ${providerId}`);
 
-    const userType = req.headers["x-user-type"];
-    const isSuperAdmin = userType === "super_admin";
+    const userType = req.headers["x-user-type"] as string | undefined;
+    const isSuperAdmin = body.isSuperAdmin === true || 
+      (userType && (userType.toUpperCase() === "SUPER_ADMIN" || userType.toUpperCase() === "SUPERADMIN"));
 
     const providerCode = providerId.toLowerCase();
     const merchantId = body.merchantId || "temp-" + Date.now();
@@ -563,8 +567,13 @@ export class GatewayController {
       upiId?: string;
       recoveryPhoneNumber?: string;
       googleVerificationCode?: string;
+      isSuperAdmin?: boolean;
     },
+    @Req() req: any,
   ) {
+    const userType = req.headers["x-user-type"] as string | undefined;
+    const isSuperAdmin = body.isSuperAdmin === true || 
+      (userType && (userType.toUpperCase() === "SUPER_ADMIN" || userType.toUpperCase() === "SUPERADMIN"));
     if (body.username && body.organizationId) {
       await this.merchantService.validateDuplicateMerchantConnection(body.username, "GPAY", body.organizationId);
     }
@@ -586,6 +595,7 @@ export class GatewayController {
       upiId: body.upiId,
       recoveryPhoneNumber: body.recoveryPhoneNumber,
       googleVerificationCode: body.googleVerificationCode,
+      isSuperAdmin,
     });
   }
 

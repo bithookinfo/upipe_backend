@@ -14,6 +14,51 @@ export class MerchantsController {
     throw new ForbiddenException("Super admin access required");
   }
 
+  private async sendPlatformMerchantAlert(message: string) {
+    const notifUrl = process.env.NOTIFICATION_SERVICE_URL;
+    if (!notifUrl) return;
+
+    let superAdminEmails: string[] = [];
+    try {
+      const axios = require("axios");
+      const identityUrl = process.env.IDENTITY_SERVICE_URL;
+      if (identityUrl) {
+        const adminsRes = await axios.get(`${identityUrl}/super-admins`, {
+          headers: { 
+              "x-internal-token": process.env.INTERNAL_TOKEN,
+              "x-user-type": "SUPER_ADMIN",
+              "x-is-super-admin": "true"
+          }
+        }).catch((err: any) => {
+           this.logger.error("Failed to fetch super admins: " + err.message);
+           return null;
+        });
+
+        if (adminsRes?.data && Array.isArray(adminsRes.data)) {
+          superAdminEmails = adminsRes.data.map((admin: any) => admin.email).filter(Boolean);
+        }
+      }
+    } catch (err) {
+      this.logger.error("Failed to fetch super admins");
+    }
+
+    if (superAdminEmails.length === 0) return;
+
+    try {
+      const axios = require("axios");
+      await axios.post(`${notifUrl}/internal/send/email`, {
+        to: superAdminEmails,
+        type: "security_alert",
+        data: {
+          organizationName: "SuperAdmin Platform",
+          message
+        }
+      }, { headers: { "x-internal-token": process.env.INTERNAL_TOKEN } });
+    } catch (e: any) {
+      this.logger.error(`Failed to send platform merchant alert: ${e.message}`);
+    }
+  }
+
   private async logAuditActivity(
     action: string,
     merchantId: string,
@@ -250,13 +295,19 @@ export class MerchantsController {
     @Headers('x-is-super-admin') isSuperAdmin?: string
   ) {
     this.validateSuperAdmin(isSuperAdmin, userType);
-    await this.prisma.merchant.update({
+    const merchant = await this.prisma.merchant.update({
       where: { id },
       data: {
         isActive: false,
         statusReason: body.reason,
       },
     });
+
+    if (merchant.isPlatform) {
+      await this.sendPlatformMerchantAlert(
+        `Platform Merchant Manually Deactivated: '${merchant.name}'. Please reactivate the merchant or reconnect its payment provider from the SuperAdmin Dashboard immediately to restore platform payment processing.`
+      );
+    }
 
     await this.logAuditActivity("MERCHANT_DISCONNECT", id, userId, organizationId, userType, ipAddress, userAgent, { reason: body.reason });
 
@@ -433,15 +484,24 @@ export class MerchantsController {
     @Headers('x-is-super-admin') isSuperAdmin?: string
   ) {
     this.validateSuperAdmin(isSuperAdmin, userType);
-    await this.prisma.merchantProvider.update({
+    const provider = await this.prisma.merchantProvider.update({
       where: { 
         id: providerId,
         merchantId: id
       },
       data: {
         status: 'EXPIRED'
+      },
+      include: {
+        merchant: true
       }
     });
+
+    if (provider.merchant?.isPlatform) {
+       await this.sendPlatformMerchantAlert(
+         `Platform Merchant Gateway Manually Disconnected: ${provider.providerType} (${provider.accountIdentifier || provider.id}) for Platform Merchant '${provider.merchant.name}'. Please reconnect the provider from SuperAdmin Dashboard immediately to restore platform payment processing.`
+       );
+    }
 
     await this.logAuditActivity("PROVIDER_DISCONNECTED", id, userId, organizationId, userType, ipAddress, userAgent, { providerId, type: "PROVIDER_DISCONNECT" });
 
