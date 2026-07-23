@@ -64,9 +64,9 @@ export class EmailService {
       this.config.get<string>("FROM_EMAIL_ALERTS") ||
       this.config.get<string>("FROM_EMAIL") ||
       fallback;
-    this.appName = this.config.get<string>("APP_NAME") || "Upipe";
+    this.appName = this.config.get<string>("APP_NAME") || "";
     this.frontendUrl =
-      this.config.get<string>("FRONTEND_URL") || "https://upipe.tech";
+      this.config.get<string>("FRONTEND_URL") || "";
     this.initTransporters();
   }
 
