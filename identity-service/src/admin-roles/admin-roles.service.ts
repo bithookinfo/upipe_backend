@@ -27,7 +27,9 @@ const SYSTEM_ROLES = {
             'billing:view', 'billing:update', 'invoice:view', 'invoice:download',
             'api_key:view', 'api_key:create', 'api_key:revoke',
             'webhook:view', 'webhook:create', 'webhook:update', 'webhook:delete',
-            'audit:view', 'audit:export'
+            'audit:view', 'audit:export',
+            'cms:view', 'cms:landing:manage', 'cms:dynamic_pages:manage', 'cms:blogs:manage',
+            'cms:navigation:manage', 'cms:media:manage', 'cms:seo:manage', 'cms:root_files:manage', 'cms:brand_assets:manage'
         ]
     },
     ADMIN: {
@@ -43,7 +45,9 @@ const SYSTEM_ROLES = {
             'analytics:view', 'analytics:export', 'report:view', 'report:create', 'report:export',
             'subscription:view', 'billing:view', 'invoice:view', 'invoice:download',
             'api_key:view', 'webhook:view', 'webhook:create', 'webhook:update',
-            'audit:view'
+            'audit:view',
+            'cms:view', 'cms:landing:manage', 'cms:dynamic_pages:manage', 'cms:blogs:manage',
+            'cms:navigation:manage', 'cms:media:manage', 'cms:seo:manage', 'cms:root_files:manage', 'cms:brand_assets:manage'
         ]
     },
     SUPPORT: {

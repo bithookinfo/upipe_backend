@@ -67,7 +67,17 @@ const ALL_PERMISSIONS = {
     WEBHOOK_DELETE: { code: 'webhook:delete', name: 'Delete Webhooks', category: 'API', service: 'organization-service' },
 
     AUDIT_VIEW: { code: 'audit:view', name: 'View Audit Logs', category: 'AUDIT', service: 'organization-service' },
-    AUDIT_EXPORT: { code: 'audit:export', name: 'Export Audit Logs', category: 'AUDIT', service: 'organization-service' }
+    AUDIT_EXPORT: { code: 'audit:export', name: 'Export Audit Logs', category: 'AUDIT', service: 'organization-service' },
+
+    CMS_VIEW: { code: 'cms:view', name: 'View CMS Dashboard', category: 'CMS', service: 'organization-service' },
+    CMS_LANDING_MANAGE: { code: 'cms:landing:manage', name: 'Manage Landing Page', category: 'CMS', service: 'organization-service' },
+    CMS_DYNAMIC_PAGES_MANAGE: { code: 'cms:dynamic_pages:manage', name: 'Manage Dynamic Pages', category: 'CMS', service: 'organization-service' },
+    CMS_BLOGS_MANAGE: { code: 'cms:blogs:manage', name: 'Manage Blogs', category: 'CMS', service: 'organization-service' },
+    CMS_NAVIGATION_MANAGE: { code: 'cms:navigation:manage', name: 'Manage Navigation', category: 'CMS', service: 'organization-service' },
+    CMS_MEDIA_MANAGE: { code: 'cms:media:manage', name: 'Manage Media Library', category: 'CMS', service: 'organization-service' },
+    CMS_SEO_MANAGE: { code: 'cms:seo:manage', name: 'Manage Global SEO', category: 'CMS', service: 'organization-service' },
+    CMS_ROOT_FILES_MANAGE: { code: 'cms:root_files:manage', name: 'Manage Root Files', category: 'CMS', service: 'organization-service' },
+    CMS_BRAND_ASSETS_MANAGE: { code: 'cms:brand_assets:manage', name: 'Manage Brand Assets', category: 'CMS', service: 'organization-service' }
 };
 
 @Injectable()
