@@ -80,8 +80,13 @@ export class ProviderConnectionController {
     @Headers("user-agent") userAgent?: string,
     @Ip() ipAddress?: string,
   ) {
-    if (body.email && organizationId) {
-      await this.merchantService.validateDuplicateMerchantConnection(body.email, "GPAY", organizationId);
+    if (organizationId) {
+      if (body.businessId) {
+        await this.merchantService.validateDuplicateMerchantConnection(body.businessId, "GPAY", organizationId);
+      }
+      if (body.email) {
+        await this.merchantService.validateDuplicateMerchantConnection(body.email, "GPAY", organizationId);
+      }
     }
     const result = await this.providerService.connectGPay(merchantId, body);
     if (userId && organizationId) {

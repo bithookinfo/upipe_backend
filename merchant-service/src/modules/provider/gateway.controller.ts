@@ -214,6 +214,14 @@ export class GatewayController {
 
     const providerCode = providerId.toLowerCase();
 
+    if (body.phoneNumber && body.organizationId) {
+      await this.providerService.checkDuplicatePhoneForProvider(
+        body.phoneNumber,
+        providerCode.toUpperCase(),
+        body.organizationId
+      );
+    }
+
     // merchantId is optional for send-otp (only needed for verify-otp to save connection)
     switch (providerCode) {
       case "phonepe":
@@ -578,8 +586,13 @@ export class GatewayController {
     const userType = req.headers["x-user-type"] as string | undefined;
     const isSuperAdmin = body.isSuperAdmin === true || 
       (userType && (userType.toUpperCase() === "SUPER_ADMIN" || userType.toUpperCase() === "SUPERADMIN"));
-    if (body.username && body.organizationId) {
-      await this.merchantService.validateDuplicateMerchantConnection(body.username, "GPAY", body.organizationId);
+    if (body.organizationId) {
+      if (body.upiId) {
+        await this.merchantService.validateDuplicateMerchantConnection(body.upiId, "GPAY", body.organizationId);
+      }
+      if (body.username) {
+        await this.merchantService.validateDuplicateMerchantConnection(body.username, "GPAY", body.organizationId);
+      }
     }
     this.logger.log(`🟢 Connecting GPay for: ${body.username} (UPI: ${body.upiId || 'not provided'})`);
 

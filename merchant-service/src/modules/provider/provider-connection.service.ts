@@ -223,9 +223,9 @@ export class ProviderConnectionService {
     return null;
   }
 
-  private async checkDuplicatePhoneForProvider(
+  async checkDuplicatePhoneForProvider(
     phoneNumber: string,
-    providerType: ProviderType,
+    providerType: any,
     merchantIdToExclude: string | null
   ) {
     const whereClause: any = {
