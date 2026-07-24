@@ -145,6 +145,14 @@ export class MerchantsController {
     };
   }
 
+  private cleanName(name: string) {
+    if (!name) return name;
+    return name
+      .replace(/Dashboard for transactions on QR\s*/i, "")
+      .replace(/MID:.*$/i, "")
+      .trim();
+  }
+
   @Get("users")
   @ApiOperation({ summary: "Get all merchants for super admin" })
   @ApiResponse({ status: 200, description: "Merchants retrieved successfully" })
@@ -209,7 +217,11 @@ export class MerchantsController {
 
     return {
       success: true,
-      data: merchants,
+      data: merchants.map((m) => ({
+        ...m,
+        name: this.cleanName(m.name),
+        businessName: this.cleanName(m.businessName)
+      })),
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -253,7 +265,11 @@ export class MerchantsController {
 
     return {
       success: true,
-      data: merchant,
+      data: {
+        ...merchant,
+        name: this.cleanName(merchant.name),
+        businessName: this.cleanName(merchant.businessName)
+      },
     };
   }
 

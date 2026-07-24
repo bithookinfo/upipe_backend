@@ -162,23 +162,34 @@ export class StatsController {
     async getHourlyTrend(
         @Query('date') dateParam?: string,
     ) {
-        const targetDate = dateParam ? new Date(dateParam) : new Date();
-        targetDate.setHours(0, 0, 0, 0);
+        let year, month, day;
+        if (dateParam) {
+            const parts = dateParam.split('-');
+            year = parseInt(parts[0], 10);
+            month = parseInt(parts[1], 10) - 1;
+            day = parseInt(parts[2], 10);
+        } else {
+            const now = new Date();
+            const istTime = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+            year = istTime.getUTCFullYear();
+            month = istTime.getUTCMonth();
+            day = istTime.getUTCDate();
+        }
         
         const data = [];
         
         for (let i = 0; i < 24; i++) {
-            const hourStart = new Date(targetDate);
-            hourStart.setHours(i, 0, 0, 0);
-            
-            const hourEnd = new Date(targetDate);
-            hourEnd.setHours(i, 59, 59, 999);
+            const hourStart = new Date(Date.UTC(year, month, day, i - 5, -30, 0, 0));
+            const hourEnd = new Date(Date.UTC(year, month, day, i - 5, 29, 59, 999));
             
             const volume = await this.prisma.order.aggregate({
                 _sum: { amount: true },
                 where: {
                     status: 'COMPLETED',
-                    createdAt: { gte: hourStart, lte: hourEnd }
+                    createdAt: {
+                        gte: hourStart,
+                        lte: hourEnd
+                    }
                 }
             });
             
