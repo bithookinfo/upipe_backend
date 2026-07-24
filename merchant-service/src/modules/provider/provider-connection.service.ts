@@ -223,6 +223,57 @@ export class ProviderConnectionService {
     return null;
   }
 
+  private async checkDuplicatePhoneForProvider(
+    phoneNumber: string,
+    providerType: ProviderType,
+    merchantIdToExclude: string | null
+  ) {
+    const whereClause: any = {
+      providerType,
+      merchant: {
+        phone: phoneNumber,
+        deletedAt: null,
+      }
+    };
+    
+    if (merchantIdToExclude && !merchantIdToExclude.startsWith("temp")) {
+      whereClause.merchant.id = { not: merchantIdToExclude };
+    }
+
+    const existingConnection = await this.prisma.merchantProvider.findFirst({
+      where: whereClause,
+      include: {
+        merchant: true
+      }
+    });
+
+    if (existingConnection) {
+      let orgName = existingConnection.merchant.organizationId;
+      try {
+        const axios = require("axios");
+        const orgUrl = process.env.ORGANIZATION_SERVICE_URL;
+        const orgRes = await axios.get(`${orgUrl}/organizations/${existingConnection.merchant.organizationId}`, {
+          headers: { 
+            "x-user-type": "SUPER_ADMIN",
+            "x-organization-id": existingConnection.merchant.organizationId
+          }
+        });
+        const payload = orgRes.data?.data;
+        if (payload?.organization?.name) {
+          orgName = payload.organization.name;
+        } else if (payload?.name) {
+          orgName = payload.name;
+        }
+      } catch (err: any) {
+        this.logger.error(`Failed to fetch org name for ${existingConnection.merchant.organizationId}: ${err.message}`, err.response?.data);
+      }
+      
+      throw new BadRequestException(
+        `Failed to connect ${providerType} account. This phone number is already connected in another organization (${orgName}).`
+      );
+    }
+  }
+
   async sendPhonePeOtp(
     merchantId: string | null,
     phoneNumber: string,
@@ -242,6 +293,8 @@ export class ProviderConnectionService {
           "Phone number must be a valid 10-digit Indian mobile number starting with 6-9",
         );
       }
+
+      await this.checkDuplicatePhoneForProvider(phoneNumber, ProviderType.PHONEPE, merchantId);
 
       const result = await this.phonePeService.sendOtp({ phoneNumber });
 
