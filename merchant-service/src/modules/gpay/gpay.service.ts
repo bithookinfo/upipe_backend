@@ -130,9 +130,13 @@ export class GpayService implements OnModuleDestroy {
       const lockFiles = ["SingletonLock", "SingletonSocket", "SingletonCookie"];
       for (const file of lockFiles) {
         const filePath = path.join(userDataDir, file);
-        if (fs.existsSync(filePath)) {
+        try {
           fs.unlinkSync(filePath);
           this.logger.log(`🗑️ Removed stale ${file} from ${userDataDir}`);
+        } catch (err: any) {
+          if (err.code !== "ENOENT") {
+            this.logger.warn(`Could not remove ${file} in ${userDataDir}: ${err.message}`);
+          }
         }
       }
     } catch (e: any) {
@@ -1297,7 +1301,7 @@ export class GpayService implements OnModuleDestroy {
 
     // Some flows land directly on passkey enrollment first; try to skip it.
     const hasPasskeyPrompt =
-      content.includes("Simplify your sign-in") || url.includes("passkeyenrollment");
+      content.includes("Simplify your sign-in") || url.includes("passkeyenrollment") || url.includes("recoveryoptions") || content.includes("Make sure you can always sign in");
 
     const clickedNotNow = hasPasskeyPrompt
       ? await this.tryClickPasskeyNotNow(page)
@@ -1553,7 +1557,7 @@ export class GpayService implements OnModuleDestroy {
             }
 
             const clicked = await frame.evaluate(() => {
-              const targets = ["not now", "skip", "no thanks", "maybe later"];
+              const targets = ["not now", "skip", "no thanks", "maybe later", "cancel"];
               const all = Array.from(
                 document.querySelectorAll('button, [role="button"], a, span, div'),
               );
@@ -1585,7 +1589,7 @@ export class GpayService implements OnModuleDestroy {
       // This handles cases where the visible text is nested or changes slightly.
       try {
         if (typeof page.getByRole === "function") {
-          const btn = page.getByRole("button", { name: /not now/i });
+          const btn = page.getByRole("button", { name: /not now|cancel|skip|no thanks/i });
           await btn.click({ timeout: 1500 }).catch(() => { });
           // If click didn't throw, assume success.
           return true;

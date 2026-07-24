@@ -1717,18 +1717,24 @@ export class MerchantService {
       let orgName = existing.merchant.organizationId;
       try {
          const axios = require("axios");
-         const orgUrl = process.env.ORGANIZATION_SERVICE_URL || 'http://localhost:3002';
-         const orgRes = await axios.get(`${orgUrl}/internal/organizations/${existing.merchant.organizationId}`, {
-             headers: { "x-internal-token": process.env.INTERNAL_TOKEN }
+         const orgUrl = process.env.ORGANIZATION_SERVICE_URL;
+         const orgRes = await axios.get(`${orgUrl}/organizations/${existing.merchant.organizationId}`, {
+           headers: { 
+             "x-user-type": "SUPER_ADMIN",
+             "x-organization-id": existing.merchant.organizationId
+           }
          });
-         if (orgRes.data?.organization?.name) {
-             orgName = orgRes.data.organization.name;
+         const payload = orgRes.data?.data;
+         if (payload?.organization?.name) {
+           orgName = payload.organization.name;
+         } else if (payload?.name) {
+           orgName = payload.name;
          }
-      } catch (err) {
-         this.logger.warn(`Failed to fetch organization details for ${existing.merchant.organizationId}`);
+      } catch (err: any) {
+         this.logger.error(`Failed to fetch org name for ${existing.merchant.organizationId}: ${err.message}`, err.response?.data);
       }
       
-      throw new Error(`This merchant is already connected to another organization. Organization: ${orgName}, Merchant: ${existing.merchant.name}`);
+      throw new BadRequestException(`Failed to connect ${providerType} account. This account is already connected in another organization (${orgName}).`);
     }
   }
 }
