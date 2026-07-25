@@ -323,6 +323,8 @@ model CmsGlobalSeo {
   googleVerification  String?  @map("google_verification") @db.VarChar(255)
   bingVerification    String?  @map("bing_verification") @db.VarChar(255)
   schemaMarkup        String?  @map("schema_markup") @db.LongText // JSON
+  headHtml            String?  @map("head_html") @db.LongText
+  bodyHtml            String?  @map("body_html") @db.LongText
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
