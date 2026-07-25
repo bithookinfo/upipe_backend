@@ -514,21 +514,73 @@ export class GpayService implements OnModuleDestroy {
         const alreadyOnDashboard = currentUrlBeforeAuth.includes("pay.google.com/g4b/activity") || currentUrlBeforeAuth.includes("pay.google.com/g4b/home");
 
         if (!alreadyOnDashboard) {
-          // Enter email - add delay before first input (reduces bot-like behavior)
-          const emailSelector = "#identifierId, input[type=\"email\"], input[name=\"identifier\"]";
-          try {
-            await page.waitForSelector(emailSelector, { timeout: 45000 });
-          } catch (e) {
-            const debugTitle = await page.title().catch(() => "");
-            const debugUrl = page.url();
-            const snippet = (await page.content().catch(() => ""))
-              .replace(/\s+/g, " ")
-              .slice(0, 240);
-            this.logger.error(
-              `❌ Email field not found. url=${debugUrl} title=${debugTitle} html_snippet=${snippet}`,
-            );
-            throw e;
+          // --- FIX for Account Chooser ---
+          if (page.url().includes("accountchooser")) {
+            this.logger.log(`Account chooser detected for ${data.email}. Handling...`);
+            try {
+              let clicked = false;
+              // Try to find the specific email in the list
+              const accountSel = `div[data-email="${data.email}"], div[data-identifier="${data.email}"]`;
+              const accElem = await page.$(accountSel).catch(() => null);
+              if (accElem) {
+                 this.logger.log(`Found ${data.email} in chooser, clicking it.`);
+                 await accElem.click();
+                 clicked = true;
+              }
+
+              if (!clicked) {
+                 this.logger.log(`Did not find ${data.email}, clicking "Use another account"...`);
+                 const useAnother = await page.$('text=/Use another account/i').catch(() => null);
+                 if (useAnother) {
+                     await useAnother.click();
+                     clicked = true;
+                 } else {
+                     const evalClicked = await page.evaluate(() => {
+                        const allNodes = Array.from(document.querySelectorAll('div, li, span'));
+                        const target = allNodes.find(n => n.textContent && n.textContent.trim().toLowerCase() === 'use another account');
+                        if (target) {
+                           (target as HTMLElement).click();
+                           return true;
+                        }
+                        return false;
+                     });
+                     if (evalClicked) clicked = true;
+                 }
+              }
+
+              if (clicked) {
+                 await new Promise((r) => setTimeout(r, 3500)); // wait for navigation/transition
+              } else {
+                 this.logger.warn("Could not find account or 'Use another account' button.");
+                 const allText = await page.evaluate(() => document.body.innerText).catch(()=>"");
+                 this.logger.debug("Page text: " + allText.replace(/\s+/g, " ").slice(0, 300));
+              }
+            } catch (err: any) {
+              this.logger.warn("Failed handling account chooser: " + err.message);
+            }
           }
+          // ---------------------------------
+
+          // Check if we jumped straight to password field (happens if we clicked an existing account)
+          const passElemFast = await page.$('input[type="password"]').catch(() => null);
+          const isPasswordAlreadyVisible = passElemFast ? await passElemFast.isVisible().catch(()=>false) : false;
+
+          if (!isPasswordAlreadyVisible) {
+            // Enter email - add delay before first input (reduces bot-like behavior)
+            const emailSelector = "#identifierId, input[type=\"email\"], input[name=\"identifier\"]";
+            try {
+              await page.waitForSelector(emailSelector, { timeout: 45000 });
+            } catch (e) {
+              const debugTitle = await page.title().catch(() => "");
+              const debugUrl = page.url();
+              const snippet = (await page.content().catch(() => ""))
+                .replace(/\s+/g, " ")
+                .slice(0, 240);
+              this.logger.error(
+                `❌ Email field not found. url=${debugUrl} title=${debugTitle} html_snippet=${snippet}`,
+              );
+              throw e;
+            }
           await new Promise((r) => setTimeout(r, 800 + Math.random() * 400));
           await page.focus(emailSelector);
           await new Promise((r) => setTimeout(r, 200));
@@ -543,6 +595,7 @@ export class GpayService implements OnModuleDestroy {
 
           // Wait for password or challenge - longer wait for Google to settle
           await new Promise(resolve => setTimeout(resolve, 3500 + Math.random() * 1500));
+          }
 
           try {
             await page.waitForSelector('input[type="password"]', { timeout: 15000 });

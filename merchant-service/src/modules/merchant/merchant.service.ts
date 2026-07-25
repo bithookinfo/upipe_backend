@@ -1626,12 +1626,18 @@ export class MerchantService {
     }
   }
 
-  async deleteMerchant(merchantId: string, organizationId: string) {
+  async deleteMerchant(merchantId: string, organizationId: string, userType?: string) {
     try {
       this.logger.log(`🗑️  Soft-deleting merchant: ${merchantId}`);
 
+      const isSuperAdmin = userType?.toUpperCase() === 'SUPER_ADMIN' || userType?.toUpperCase() === 'SUPERADMIN';
+      const whereClause: any = { id: merchantId };
+      if (!isSuperAdmin) {
+        whereClause.organizationId = organizationId;
+      }
+
       const merchant = await this.prisma.merchant.findFirst({
-        where: { id: merchantId, organizationId },
+        where: whereClause,
         include: {
           providers: true,
           config: true,

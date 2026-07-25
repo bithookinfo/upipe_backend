@@ -172,26 +172,40 @@ export class MerchantsController {
 
     const where: any = {};
 
+    const andConditions: any[] = [];
+
     if (search) {
-      where.OR = [
-        { name: { contains: search } },
-        { businessName: { contains: search } },
-        { email: { contains: search } },
-      ];
+      andConditions.push({
+        OR: [
+          { name: { contains: search } },
+          { businessName: { contains: search } },
+          { email: { contains: search } },
+        ]
+      });
     }
 
     if (status && status !== "all") {
-      where.isActive = status === "active";
+      andConditions.push({ isActive: status === "active" });
     }
 
     if (type === "all") {
+      // no type filter
     } else if (type === "regular") {
-      where.isPlatform = false;
+      andConditions.push({ isPlatform: false, organizationId: { not: "platform-org-id" } });
     } else {
-      where.isPlatform = true;
+      andConditions.push({
+        OR: [
+          { isPlatform: true },
+          { organizationId: "platform-org-id" }
+        ]
+      });
     }
+
+    andConditions.push({ deletedAt: null });
     
-    where.deletedAt = null;
+    if (andConditions.length > 0) {
+      where.AND = andConditions;
+    }
 
     const [merchants, total] = await Promise.all([
       this.prisma.merchant.findMany({
