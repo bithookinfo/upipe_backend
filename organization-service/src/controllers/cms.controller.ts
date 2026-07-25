@@ -10,9 +10,16 @@ import {
   Req,
   Res,
   Logger,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
 import { CmsService } from '../services/cms.service';
 import { Request, Response } from 'express';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { extname, join } from 'path';
+import { existsSync, mkdirSync } from 'fs';
 
 // =============================================
 // ADMIN CMS CONTROLLER (requires auth via gateway)
@@ -206,6 +213,46 @@ export class CmsAdminController {
 
   @Post('media')
   async createMedia(@Body() body: any) {
+    if (body.file && typeof body.file === 'string' && body.file.startsWith('data:')) {
+      const matches = body.file.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (!matches || matches.length !== 3) {
+        throw new BadRequestException('Invalid base64 string');
+      }
+
+      const mimeType = matches[1];
+      const base64Data = matches[2];
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const fs = require('fs');
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const path = require('path');
+      
+      const buffer = Buffer.from(base64Data, 'base64');
+      
+      const uploadPath = path.join(process.cwd(), 'public', 'uploads');
+      if (!fs.existsSync(uploadPath)) {
+        fs.mkdirSync(uploadPath, { recursive: true });
+      }
+
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+      const originalName = body.filename || 'upload.png';
+      const ext = path.extname(originalName) || '.png';
+      const filename = `file-${uniqueSuffix}${ext}`;
+      
+      const filePath = path.join(uploadPath, filename);
+      fs.writeFileSync(filePath, buffer);
+      
+      const mediaPayload = {
+        filename: originalName,
+        url: `/api/v1/organizations/public/uploads/${filename}`,
+        mimeType: mimeType,
+        size: buffer.length,
+        folder: body.folder || 'general',
+      };
+
+      const data = await this.cmsService.createMedia(mediaPayload);
+      return { success: true, data };
+    }
+
     const data = await this.cmsService.createMedia(body);
     return { success: true, data };
   }

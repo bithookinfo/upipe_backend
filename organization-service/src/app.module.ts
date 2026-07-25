@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 import { OrganizationController } from './controllers/organization.controller';
 import { RoleController } from './controllers/role.controller';
 import { UserController } from './controllers/user.controller';
@@ -23,6 +25,10 @@ import { CmsService } from './services/cms.service';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env'
+    }),
+    ServeStaticModule.forRoot({
+      rootPath: join(process.cwd(), 'public'),
+      serveRoot: '/organizations/public',
     })
   ],
   controllers: [

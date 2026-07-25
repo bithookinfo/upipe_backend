@@ -229,25 +229,26 @@ export class GatewayController {
         proxyHeaders["x-internal-token"] = internalToken;
       }
 
-      if (isSse) {
-        // SSE: stream the response (long-lived connection)
+      const isStaticFile = path.includes("/public/");
+
+      if (isSse || isStaticFile) {
         const response = await axios({
           method: req.method as any,
           url: targetUrl,
           headers: proxyHeaders,
           params: req.query,
           responseType: "stream",
-          timeout: 0,
+          timeout: isStaticFile ? 60000 : 0,
           validateStatus: () => true,
         });
 
         res.status(response.status);
-        const forwardHeaders = ["content-type", "cache-control", "connection", "x-accel-buffering"];
+        const forwardHeaders = ["content-type", "content-length", "cache-control", "connection", "x-accel-buffering", "etag", "last-modified"];
         forwardHeaders.forEach((name) => {
           const value = response.headers[name];
           if (value) res.setHeader(name, value);
         });
-        if (!res.getHeader("content-type")) {
+        if (isSse && !res.getHeader("content-type")) {
           res.setHeader("Content-Type", "text/event-stream");
         }
         response.data.pipe(res);
@@ -262,15 +263,19 @@ export class GatewayController {
       const response = await axios({
         method: req.method as any,
         url: targetUrl,
-        data: req.body,
+        data: req.method !== 'GET' ? req.body : undefined,
         headers: proxyHeaders,
         params: req.query,
+        responseType: 'json',
         // GPay connect may legitimately take >60s (Playwright + Google challenges).
         timeout: isGpayConnect ? 180000 : 60000,
         validateStatus: () => true,
       });
 
       this.logger.debug(`Response from ${targetUrl}: ${response.status}`);
+      if (req.method === 'GET') {
+        this.logger.debug(`Data type: ${typeof response.data}, isBuffer: ${Buffer.isBuffer(response.data)}, length: ${response.data?.length}`);
+      }
 
       if (response.headers) {
         Object.entries(response.headers).forEach(([key, value]) => {
