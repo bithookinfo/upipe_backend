@@ -1702,6 +1702,9 @@ export class MerchantService {
       where: {
         providerType: providerType as any,
         isActive: true,
+        merchant: {
+          deletedAt: null
+        }
       },
       include: {
         merchant: true

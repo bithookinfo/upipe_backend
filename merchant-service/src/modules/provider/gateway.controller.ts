@@ -590,9 +590,6 @@ export class GatewayController {
       if (body.upiId) {
         await this.merchantService.validateDuplicateMerchantConnection(body.upiId, "GPAY", body.organizationId);
       }
-      if (body.username) {
-        await this.merchantService.validateDuplicateMerchantConnection(body.username, "GPAY", body.organizationId);
-      }
     }
     this.logger.log(`🟢 Connecting GPay for: ${body.username} (UPI: ${body.upiId || 'not provided'})`);
 
