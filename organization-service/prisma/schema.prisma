@@ -464,6 +464,16 @@ model CmsBlog {
   featuredImage String?   @map("featured_image") @db.VarChar(500)
   status        String    @default("draft") @db.VarChar(20) // draft, published
   publishedAt   DateTime? @map("published_at")
+  seoTitle      String?   @map("seo_title") @db.VarChar(255)
+  seoDescription String?  @map("seo_description") @db.Text
+  seoKeywords   String?   @map("seo_keywords") @db.Text
+  ogTitle       String?   @map("og_title") @db.VarChar(255)
+  ogDescription String?   @map("og_description") @db.Text
+  ogImage       String?   @map("og_image") @db.VarChar(500)
+  headHtml      String?   @map("head_html") @db.LongText
+  bodyHtml      String?   @map("body_html") @db.LongText
+  seoIndex      Boolean   @default(true) @map("seo_index")
+  seoFollow     Boolean   @default(true) @map("seo_follow")
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 

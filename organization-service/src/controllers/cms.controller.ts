@@ -186,9 +186,26 @@ export class CmsAdminController {
     return { success: true, data };
   }
 
+  @Get('root-files/details/:filename')
+  async getRootFileDetails(@Param('filename') filename: string) {
+    const data = await this.cmsService.getRootFileByFilename(filename);
+    return { success: true, data };
+  }
+
   @Post('root-files')
   async upsertRootFile(@Body() body: { filename: string; content?: string }) {
     const data = await this.cmsService.upsertRootFile(body);
+    return { success: true, data };
+  }
+
+  @Post('root-files/upload')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadRootFile(@UploadedFile() file: Express.Multer.File, @Body('filename') filename: string) {
+    if (!file) {
+      throw new BadRequestException('File is required');
+    }
+    const targetFilename = filename || file.originalname;
+    const data = await this.cmsService.uploadRootFile(targetFilename, file.buffer);
     return { success: true, data };
   }
 

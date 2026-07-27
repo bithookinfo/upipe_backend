@@ -1,5 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
+import * as fs from 'fs';
+import * as path from 'path';
 
 @Injectable()
 export class CmsService {
@@ -284,29 +286,102 @@ export class CmsService {
   // ROOT FILES
   // =============================================
 
+  private get publicDir(): string {
+    const defaultPath = path.join(process.cwd(), '../../upipe-frontend/public');
+    return process.env.FRONTEND_PUBLIC_DIR || defaultPath;
+  }
+
+  private ensurePublicDir() {
+    if (!fs.existsSync(this.publicDir)) {
+      fs.mkdirSync(this.publicDir, { recursive: true });
+    }
+  }
+
   async getRootFiles() {
-    return this.prisma.cmsRootFile.findMany({ orderBy: { createdAt: 'desc' } });
+    this.ensurePublicDir();
+    const files = await fs.promises.readdir(this.publicDir).catch(() => []);
+    const rootFiles = [];
+    
+    const validExtensions = ['.txt', '.xml', '.html', '.json', '.webmanifest'];
+
+    for (const filename of files) {
+      const ext = path.extname(filename).toLowerCase();
+      if (!validExtensions.includes(ext)) continue;
+
+      const filePath = path.join(this.publicDir, filename);
+      try {
+        const stat = await fs.promises.stat(filePath);
+        if (stat.isFile()) {
+          rootFiles.push({
+            id: filename,
+            filename: filename,
+            createdAt: stat.birthtime,
+            updatedAt: stat.mtime,
+          });
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to stat root file: ${filename}`);
+      }
+    }
+    
+    return rootFiles.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
   }
 
   async getRootFileByFilename(filename: string) {
-    const file = await this.prisma.cmsRootFile.findUnique({ where: { filename } });
-    if (!file) throw new NotFoundException('Root file not found');
-    return file;
+    this.ensurePublicDir();
+    const filePath = path.join(this.publicDir, filename);
+    
+    if (!fs.existsSync(filePath)) {
+      throw new NotFoundException('Root file not found');
+    }
+
+    const content = await fs.promises.readFile(filePath, 'utf-8');
+    const stat = await fs.promises.stat(filePath);
+
+    return {
+      id: filename,
+      filename,
+      content,
+      createdAt: stat.birthtime,
+      updatedAt: stat.mtime
+    };
   }
 
   async upsertRootFile(data: { filename: string; content?: string }) {
-    return this.prisma.cmsRootFile.upsert({
-      where: { filename: data.filename },
-      update: { content: data.content },
-      create: {
-        filename: data.filename,
-        content: data.content,
-      },
-    });
+    this.ensurePublicDir();
+    const filePath = path.join(this.publicDir, data.filename);
+    await fs.promises.writeFile(filePath, data.content || '', 'utf-8');
+    
+    const stat = await fs.promises.stat(filePath);
+    return {
+      id: data.filename,
+      filename: data.filename,
+      content: data.content,
+      createdAt: stat.birthtime,
+      updatedAt: stat.mtime
+    };
+  }
+  
+  async uploadRootFile(filename: string, buffer: Buffer) {
+    this.ensurePublicDir();
+    const filePath = path.join(this.publicDir, filename);
+    await fs.promises.writeFile(filePath, buffer);
+    
+    const stat = await fs.promises.stat(filePath);
+    return {
+      id: filename,
+      filename: filename,
+      createdAt: stat.birthtime,
+      updatedAt: stat.mtime
+    };
   }
 
   async deleteRootFile(id: string) {
-    return this.prisma.cmsRootFile.delete({ where: { id } });
+    const filePath = path.join(this.publicDir, id);
+    if (fs.existsSync(filePath)) {
+      await fs.promises.unlink(filePath);
+    }
+    return { success: true };
   }
 
   async getMedia(folder?: string) {

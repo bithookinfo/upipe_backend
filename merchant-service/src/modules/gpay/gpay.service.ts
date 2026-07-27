@@ -2350,7 +2350,9 @@ export class GpayService implements OnModuleDestroy {
     // Clean up any existing session for this provider
     const existing = this.activeSessions.get(providerId);
     if (existing) {
-      existing.browser.close().catch(() => { });
+      if (existing.browser !== session.browser) {
+        existing.browser.close().catch(() => { });
+      }
     }
 
     this.activeSessions.set(providerId, {
