@@ -562,14 +562,20 @@ export class GpayService implements OnModuleDestroy {
           // ---------------------------------
 
           // Check if we jumped straight to password field (happens if we clicked an existing account)
+          // Also check if the email field is present but hidden, which usually indicates we are on the password step.
+          const isEmailHidden = await page.evaluate(() => {
+            const emailElem = document.querySelector('#identifierId, input[type="email"], input[name="identifier"]');
+            return !!(emailElem && (emailElem.getAttribute('type') === 'hidden' || (emailElem as HTMLElement).offsetParent === null));
+          }).catch(() => false);
+
           const passElemFast = await page.$('input[type="password"]').catch(() => null);
           const isPasswordAlreadyVisible = passElemFast ? await passElemFast.isVisible().catch(()=>false) : false;
 
-          if (!isPasswordAlreadyVisible) {
+          if (!isPasswordAlreadyVisible && !isEmailHidden) {
             // Enter email - add delay before first input (reduces bot-like behavior)
             const emailSelector = "#identifierId, input[type=\"email\"], input[name=\"identifier\"]";
             try {
-              await page.waitForSelector(emailSelector, { timeout: 45000 });
+              await page.waitForSelector(emailSelector, { timeout: 90000 });
             } catch (e) {
               const debugTitle = await page.title().catch(() => "");
               const debugUrl = page.url();
@@ -1035,7 +1041,14 @@ export class GpayService implements OnModuleDestroy {
         this.loginSessions.delete(sessionId);
       }
       
-      throw new BadRequestException(error?.message || "GPay connection failed");
+      let errorMessage = error?.message || "GPay connection failed";
+      if (errorMessage.includes("Timeout") && errorMessage.includes("waitForSelector")) {
+        errorMessage = "Connection timed out while waiting for Google to respond. This usually happens if the network is slow or Google requires additional verification (like a CAPTCHA or Security Key). Please try again.";
+      } else if (errorMessage.includes("net::ERR_ABORTED") || errorMessage.includes("Navigation failed")) {
+        errorMessage = "The connection to Google was interrupted. Please try again.";
+      }
+
+      throw new BadRequestException(errorMessage);
     }
   }
 
@@ -2775,7 +2788,7 @@ export class GpayService implements OnModuleDestroy {
       await session.page
         .goto(transactionsUrl, {
           waitUntil: "domcontentloaded",
-          timeout: 45000, // Extended timeout for first load
+          timeout: 90000, // Extended timeout for first load
         })
         .catch(async (e: any) => {
           const msg = String(e?.message || "");
@@ -2783,7 +2796,7 @@ export class GpayService implements OnModuleDestroy {
           if (msg.includes("net::ERR_ABORTED")) {
             await new Promise((r) => setTimeout(r, 1200));
             await session.page
-              .goto(transactionsUrl, { waitUntil: "domcontentloaded", timeout: 45000 })
+              .goto(transactionsUrl, { waitUntil: "domcontentloaded", timeout: 90000 })
               .catch((e2: any) =>
                 this.logger.warn(`Initial nav retry warning for ${providerId}: ${e2?.message}`),
               );

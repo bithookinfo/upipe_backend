@@ -179,6 +179,25 @@ export class OrdersService {
           { customerMobile: { contains: searchTerm } },
           { id: { contains: searchTerm } },
           { description: { contains: searchTerm } },
+          { utr: { contains: searchTerm } },
+          {
+            transactions: {
+              some: {
+                OR: [
+                  { utr: { contains: searchTerm } },
+                  { externalTransactionId: { contains: searchTerm } },
+                  { customerName: { contains: searchTerm } },
+                  { customerContact: { contains: searchTerm } },
+                  { bankRefNumber: { contains: searchTerm } },
+                ],
+              },
+            },
+          },
+          {
+            paymentLink: {
+              qrData: { contains: searchTerm },
+            },
+          },
         ];
         const amountNum = parseFloat(searchTerm);
         if (!Number.isNaN(amountNum) && amountNum >= 0) {
@@ -742,6 +761,7 @@ export class OrdersService {
               );
               if (provider) {
                 foundMerchant = merchant;
+                orderData.providerType = provider.providerType;
                 break;
               }
             }
@@ -1122,6 +1142,86 @@ export class OrdersService {
         generatedOrderId = generatedOrderId.slice(0, -1);
       }
 
+      let finalAmount = parseFloat(orderData.amount);
+
+      // Fractional Uniqueness for BharatPe
+      let isBharatPe = false;
+      if (orderData.providerType === "BHARATPE") {
+        isBharatPe = true;
+      } else if (merchantId) {
+        try {
+          const axios = require("axios");
+          const response = await axios.get(
+            `${process.env.MERCHANT_SERVICE_URL}/merchant/${merchantId}/providers`,
+            { headers: { "x-internal-token": process.env.INTERNAL_TOKEN } }
+          );
+          const providers = response.data?.providers || [];
+          const activeProvider = providers.find((p: any) => p.isActive);
+          if (activeProvider && activeProvider.providerType === "BHARATPE") {
+            isBharatPe = true;
+          }
+        } catch (e: any) {
+          console.error("Failed to fetch providers for uniqueness check:", e.message);
+        }
+      }
+
+      if (isBharatPe) {
+        try {
+          finalAmount = await (this.prisma as any).$transaction(async (tx: any) => {
+            // MySQL named advisory lock on merchantId (max 64 chars)
+            const lockKey = `ord_${merchantId}`.substring(0, 64);
+            const [lockRes]: any = await tx.$queryRawUnsafe(
+              `SELECT GET_LOCK(?, 5) AS acquired`,
+              lockKey
+            );
+
+            if (!lockRes || Number(lockRes.acquired) !== 1) {
+              throw new Error("System busy processing another order. Please retry.");
+            }
+
+            try {
+              let currentPaise = Math.round(finalAmount * 100);
+              const MAX_INCREMENT_PAISE = 1000;
+              let attempts = 0;
+              let isUnique = false;
+
+              while (!isUnique && attempts <= MAX_INCREMENT_PAISE) {
+                const checkAmount = currentPaise / 100;
+                const existingOrder = await tx.order.findFirst({
+                  where: {
+                    merchantId: merchantId,
+                    amount: checkAmount,
+                    status: "PENDING",
+                  },
+                });
+
+                if (!existingOrder) {
+                  isUnique = true;
+                } else {
+                  currentPaise += 1;
+                  attempts++;
+                }
+              }
+
+              if (!isUnique) {
+                throw new Error("Unable to allocate unique payment amount. Please retry.");
+              }
+
+              return currentPaise / 100;
+            } finally {
+              await tx.$queryRawUnsafe(`SELECT RELEASE_LOCK(?)`, lockKey).catch(() => {});
+            }
+          });
+        } catch (error: any) {
+          return {
+            code: 5000,
+            status: false,
+            msg: error.message || "Failed to allocate unique payment amount.",
+          };
+        }
+      }
+
+
       const order = await (this.prisma.order as any).create({
         data: {
           externalOrderId: generatedOrderId,
@@ -1129,7 +1229,7 @@ export class OrdersService {
           organizationId: organizationId,
           merchantId: merchantId,
           providerId: orderData.connectorId,
-          amount: parseFloat(orderData.amount),
+          amount: finalAmount,
           currency: orderData.currency || "INR",
           customerName: orderData.customerName,
           customerMobile: orderData.customerMobile,

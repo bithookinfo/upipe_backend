@@ -128,6 +128,33 @@ export class TransactionsController {
         }
       }
 
+      // Phase 4: Exact Fractional Amount Matching (Exclusively for BharatPe)
+      // Since BharatPe doesn't pass our orderId, we uniquely identify pending orders by their fractional amount.
+      if (!syncData.orderId && trueMerchantId && syncData.amount && syncData.providerCode === "BHARATPE") {
+        const syncAmountPaise = Math.round(Number(syncData.amount) * 100);
+        
+        const orderByAmount = await this.prisma.order.findFirst({
+          where: {
+            merchantId: trueMerchantId,
+            amount: syncAmountPaise / 100,
+            status: "PENDING",
+            ...(syncData.providerId ? { providerId: syncData.providerId } : {}),
+            OR: [
+              { expiresAt: null },
+              { expiresAt: { gte: new Date() } }
+            ]
+          },
+          orderBy: { createdAt: "asc" }
+        });
+
+        if (orderByAmount) {
+          syncData.orderId = orderByAmount.id;
+          this.logger.log(
+            `Matched BHARATPE order by exact fractional amount: ${syncData.amount} -> orderId ${orderByAmount.id}`
+          );
+        }
+      }
+
       let transaction = await this.prisma.transaction.findFirst({
         where: {
           externalTransactionId: syncData.externalTransactionId,
