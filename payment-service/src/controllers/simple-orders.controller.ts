@@ -1278,6 +1278,55 @@ export class OrdersService {
 
       const qrResult = await this.qrcodeService.createQrCode(order.id);
 
+      // Non-blocking internal request to gpay-service for instant order activation
+      if (
+        orderData.providerType === "GPAY" ||
+        orderData.provider === "GPAY" ||
+        String(order.providerId).toLowerCase().includes("gpay") ||
+        (orderData.metadata && orderData.metadata.providerType === "GPAY")
+      ) {
+        try {
+          const merchantServiceUrl =
+            process.env.MERCHANT_SERVICE_URL || "http://localhost:4002";
+          const gpayServiceUrl =
+            process.env.GPAY_SERVICE_URL || "http://localhost:4007";
+          const internalToken =
+            process.env.INTERNAL_TOKEN || "default-internal-token";
+          const axios = require("axios");
+
+          axios
+            .get(
+              `${merchantServiceUrl}/internal/gpay/merchants/${order.merchantId}/provider`,
+              {
+                timeout: 3000,
+                headers: { "x-internal-token": internalToken },
+              },
+            )
+            .then((res: any) => {
+              const providerId = res.data?.id;
+              if (providerId) {
+                return axios.post(
+                  `${gpayServiceUrl}/internal/gpay/providers/${providerId}/activate`,
+                  { merchantId: order.merchantId },
+                  {
+                    timeout: 5000,
+                    headers: { "x-internal-token": internalToken },
+                  },
+                );
+              }
+            })
+            .catch((e: any) => {
+              console.warn(
+                `GPay instant provider activation check failed (fallback to periodic cron): ${e.message}`,
+              );
+            });
+        } catch (e: any) {
+          console.warn(
+            `Failed to trigger GPay instant provider activation: ${e.message}`,
+          );
+        }
+      }
+
       const publicUrl = process.env.PUBLIC_API_URL;
       const paymentUrl = `${publicUrl}/payment/${qrResult.qrCode.paymentLink}`;
 

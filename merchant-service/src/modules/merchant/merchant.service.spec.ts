@@ -68,18 +68,18 @@ describe("MerchantService", () => {
         category: null,
         providers: [],
       };
-      prismaService.merchant.findUnique.mockResolvedValue(mockMerchant);
+      prismaService.merchant.findFirst.mockResolvedValue(mockMerchant);
 
-      const result = await service.getMerchant("merchant-123");
+      const result = await service.getMerchant("merchant-123", "org-1");
 
       expect(result.success).toBe(true);
       expect(result.merchant.id).toBe("merchant-123");
     });
 
     it("should throw NotFoundException if merchant not found", async () => {
-      prismaService.merchant.findUnique.mockResolvedValue(null);
+      prismaService.merchant.findFirst.mockResolvedValue(null);
 
-      await expect(service.getMerchant("nonexistent")).rejects.toThrow(
+      await expect(service.getMerchant("nonexistent", "org-1")).rejects.toThrow(
         NotFoundException,
       );
     });
@@ -159,10 +159,11 @@ describe("MerchantService", () => {
         category: { name: "E-Commerce" },
       };
 
-      prismaService.merchant.findUnique.mockResolvedValue(mockMerchant);
+      prismaService.merchant.findFirst.mockResolvedValue(mockMerchant);
 
       const result = await service.validateMerchantForTransaction(
         merchantId,
+        "org-1",
         amount,
       );
 
@@ -171,10 +172,11 @@ describe("MerchantService", () => {
     });
 
     it("should return canProcess false if merchant not found", async () => {
-      prismaService.merchant.findUnique.mockResolvedValue(null);
+      prismaService.merchant.findFirst.mockResolvedValue(null);
 
       const result = await service.validateMerchantForTransaction(
         "nonexistent",
+        "org-1",
         100,
       );
 
@@ -188,10 +190,11 @@ describe("MerchantService", () => {
         config: null,
         category: null,
       };
-      prismaService.merchant.findUnique.mockResolvedValue(mockMerchant);
+      prismaService.merchant.findFirst.mockResolvedValue(mockMerchant);
 
       const result = await service.validateMerchantForTransaction(
         "merchant-123",
+        "org-1",
         100,
       );
 

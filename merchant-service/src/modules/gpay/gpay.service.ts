@@ -2,6 +2,7 @@ import {
   Injectable,
   Logger,
   BadRequestException,
+  NotFoundException,
   OnModuleDestroy,
 } from "@nestjs/common";
 import { ModuleRef } from "@nestjs/core";
@@ -202,6 +203,7 @@ export class GpayService implements OnModuleDestroy {
         },
         select: {
           id: true,
+          metadata: true,
         },
         take: 20,
       });
@@ -209,6 +211,14 @@ export class GpayService implements OnModuleDestroy {
       if (!expiredProviders.length) return;
 
       for (const p of expiredProviders) {
+        const isNewRuntimeEnabled =
+          process.env.GPAY_NEW_RUNTIME_ENABLED === 'true';
+        if (
+          isNewRuntimeEnabled &&
+          (p.metadata as any)?.gpayRuntime === 'NEW'
+        ) {
+          continue;
+        }
         if (this.activeSessions.has(p.id)) {
           await this.prisma.merchantProvider
             .update({
@@ -376,6 +386,24 @@ export class GpayService implements OnModuleDestroy {
           }
         });
 
+        const isNewRuntimeEnabled =
+          process.env.GPAY_NEW_RUNTIME_ENABLED === 'true';
+        const targetRuntime =
+          (existingProvider?.metadata as any)?.gpayRuntime ||
+          (data as any)?.gpayRuntime;
+        if (isNewRuntimeEnabled && targetRuntime === 'NEW') {
+          this.logger.log(
+            `[Coordinator] GPAY_NEW_RUNTIME_ENABLED is true and runtime is NEW. Forwarding connectGPay to gpay-service...`,
+          );
+          return this.forwardToNewGpayService(
+            '/gateway/gpay/connect-gpay',
+            {
+              merchantId,
+              ...data,
+            },
+          );
+        }
+
         // If already active in memory, reuse it instead of opening another
         // persistent Chromium profile (prevents SingletonLock conflicts).
         if (existingProvider && this.activeSessions.has(existingProvider.id)) {
@@ -422,7 +450,7 @@ export class GpayService implements OnModuleDestroy {
         );
 
         let launchAttempts = 0;
-        
+
         while (launchAttempts < 3) {
           try {
             this.clearSingletonLock(userDataDir);
@@ -523,37 +551,37 @@ export class GpayService implements OnModuleDestroy {
               const accountSel = `div[data-email="${data.email}"], div[data-identifier="${data.email}"]`;
               const accElem = await page.$(accountSel).catch(() => null);
               if (accElem) {
-                 this.logger.log(`Found ${data.email} in chooser, clicking it.`);
-                 await accElem.click();
-                 clicked = true;
+                this.logger.log(`Found ${data.email} in chooser, clicking it.`);
+                await accElem.click();
+                clicked = true;
               }
 
               if (!clicked) {
-                 this.logger.log(`Did not find ${data.email}, clicking "Use another account"...`);
-                 const useAnother = await page.$('text=/Use another account/i').catch(() => null);
-                 if (useAnother) {
-                     await useAnother.click();
-                     clicked = true;
-                 } else {
-                     const evalClicked = await page.evaluate(() => {
-                        const allNodes = Array.from(document.querySelectorAll('div, li, span'));
-                        const target = allNodes.find(n => n.textContent && n.textContent.trim().toLowerCase() === 'use another account');
-                        if (target) {
-                           (target as HTMLElement).click();
-                           return true;
-                        }
-                        return false;
-                     });
-                     if (evalClicked) clicked = true;
-                 }
+                this.logger.log(`Did not find ${data.email}, clicking "Use another account"...`);
+                const useAnother = await page.$('text=/Use another account/i').catch(() => null);
+                if (useAnother) {
+                  await useAnother.click();
+                  clicked = true;
+                } else {
+                  const evalClicked = await page.evaluate(() => {
+                    const allNodes = Array.from(document.querySelectorAll('div, li, span'));
+                    const target = allNodes.find(n => n.textContent && n.textContent.trim().toLowerCase() === 'use another account');
+                    if (target) {
+                      (target as HTMLElement).click();
+                      return true;
+                    }
+                    return false;
+                  });
+                  if (evalClicked) clicked = true;
+                }
               }
 
               if (clicked) {
-                 await new Promise((r) => setTimeout(r, 3500)); // wait for navigation/transition
+                await new Promise((r) => setTimeout(r, 3500)); // wait for navigation/transition
               } else {
-                 this.logger.warn("Could not find account or 'Use another account' button.");
-                 const allText = await page.evaluate(() => document.body.innerText).catch(()=>"");
-                 this.logger.debug("Page text: " + allText.replace(/\s+/g, " ").slice(0, 300));
+                this.logger.warn("Could not find account or 'Use another account' button.");
+                const allText = await page.evaluate(() => document.body.innerText).catch(() => "");
+                this.logger.debug("Page text: " + allText.replace(/\s+/g, " ").slice(0, 300));
               }
             } catch (err: any) {
               this.logger.warn("Failed handling account chooser: " + err.message);
@@ -569,7 +597,7 @@ export class GpayService implements OnModuleDestroy {
           }).catch(() => false);
 
           const passElemFast = await page.$('input[type="password"]').catch(() => null);
-          const isPasswordAlreadyVisible = passElemFast ? await passElemFast.isVisible().catch(()=>false) : false;
+          const isPasswordAlreadyVisible = passElemFast ? await passElemFast.isVisible().catch(() => false) : false;
 
           if (!isPasswordAlreadyVisible && !isEmailHidden) {
             // Enter email - add delay before first input (reduces bot-like behavior)
@@ -587,20 +615,20 @@ export class GpayService implements OnModuleDestroy {
               );
               throw e;
             }
-          await new Promise((r) => setTimeout(r, 800 + Math.random() * 400));
-          await page.focus(emailSelector);
-          await new Promise((r) => setTimeout(r, 200));
-          for (const char of data.email) {
-            await page.type(emailSelector, char, {
-              delay: 60 + Math.floor(Math.random() * 80),
-            });
-          }
+            await new Promise((r) => setTimeout(r, 800 + Math.random() * 400));
+            await page.focus(emailSelector);
+            await new Promise((r) => setTimeout(r, 200));
+            for (const char of data.email) {
+              await page.type(emailSelector, char, {
+                delay: 60 + Math.floor(Math.random() * 80),
+              });
+            }
 
-          await new Promise((r) => setTimeout(r, 300 + Math.random() * 300));
-          await page.keyboard.press("Enter");
+            await new Promise((r) => setTimeout(r, 300 + Math.random() * 300));
+            await page.keyboard.press("Enter");
 
-          // Wait for password or challenge - longer wait for Google to settle
-          await new Promise(resolve => setTimeout(resolve, 3500 + Math.random() * 1500));
+            // Wait for password or challenge - longer wait for Google to settle
+            await new Promise(resolve => setTimeout(resolve, 3500 + Math.random() * 1500));
           }
 
           try {
@@ -618,7 +646,7 @@ export class GpayService implements OnModuleDestroy {
             this.logger.warn("Password field not found, possibly rejection or phone verification");
           }
         } else {
-           this.logger.log(`✅ Already on GPay dashboard during login flow - skipping credential entry! URL: ${currentUrlBeforeAuth}`);
+          this.logger.log(`✅ Already on GPay dashboard during login flow - skipping credential entry! URL: ${currentUrlBeforeAuth}`);
         }
 
         session = {
@@ -1030,17 +1058,17 @@ export class GpayService implements OnModuleDestroy {
 
     } catch (error: any) {
       this.logger.error(`❌ Failed GPay flow:`, error);
-      
+
       try {
-        await page?.close?.().catch(() => {});
-        await context?.close?.().catch(() => {});
-        await browser?.close?.().catch(() => {});
+        await page?.close?.().catch(() => { });
+        await context?.close?.().catch(() => { });
+        await browser?.close?.().catch(() => { });
       } catch { }
-      
+
       if (sessionId) {
         this.loginSessions.delete(sessionId);
       }
-      
+
       let errorMessage = error?.message || "GPay connection failed";
       if (errorMessage.includes("Timeout") && errorMessage.includes("waitForSelector")) {
         errorMessage = "Connection timed out while waiting for Google to respond. This usually happens if the network is slow or Google requires additional verification (like a CAPTCHA or Security Key). Please try again.";
@@ -1159,7 +1187,7 @@ export class GpayService implements OnModuleDestroy {
     return savedUpiId ? { savedUpiId } : {};
   }
 
-  private async finalizeGPayConnection(
+  public async finalizeGPayConnection(
     merchantId: string,
     data: {
       email: string;
@@ -1168,9 +1196,24 @@ export class GpayService implements OnModuleDestroy {
       organizationId: string;
       upiId?: string;
       isSuperAdmin?: boolean;
+      gpayRuntime?: "LEGACY" | "NEW";
     }
   ): Promise<MerchantProvider> {
     let effectiveMerchantId = merchantId;
+
+    const isNewRuntimeEnabled = process.env.GPAY_NEW_RUNTIME_ENABLED === 'true';
+    if (isNewRuntimeEnabled && data.gpayRuntime === 'NEW') {
+      this.logger.log(
+        `[Coordinator] GPAY_NEW_RUNTIME_ENABLED is true and runtime is NEW. Forwarding finalizeGPayConnection to gpay-service...`,
+      );
+      return this.forwardToNewGpayService(
+        '/gateway/gpay/finalize-connection',
+        {
+          merchantId,
+          ...data,
+        },
+      );
+    }
 
     let existingMerchantId: string | null = null;
 
@@ -1192,566 +1235,550 @@ export class GpayService implements OnModuleDestroy {
     }
 
     // 2. Try finding by email (accountIdentifier OR credentials?.email)
-    if (!existingMerchantId) {
-      const existingProviders = await this.prisma.merchantProvider.findMany({
-        where: {
-          providerType: ProviderType.GPAY,
-          merchant: { organizationId: data.organizationId },
-        },
-        select: { merchantId: true, accountIdentifier: true, credentials: true }
-      });
+if (!existingMerchantId) {
+  const existingProviders = await this.prisma.merchantProvider.findMany({
+    where: {
+      providerType: ProviderType.GPAY,
+      merchant: { organizationId: data.organizationId },
+    },
+    select: { merchantId: true, accountIdentifier: true, credentials: true }
+  });
 
-      for (const p of existingProviders) {
-        let pEmail = p.accountIdentifier;
-        if (p.credentials && typeof p.credentials === 'object' && (p.credentials as any).email) {
-          pEmail = (p.credentials as any).email;
-        }
-        if (pEmail === data.email || p.accountIdentifier === data.email) {
-          existingMerchantId = p.merchantId;
-          break;
-        }
-      }
-
-      if (existingMerchantId) {
-        this.logger.log(`♻️ Found existing GPay provider by email: ${existingMerchantId}`);
-      }
+  for (const p of existingProviders) {
+    let pEmail = p.accountIdentifier;
+    if (p.credentials && typeof p.credentials === 'object' && (p.credentials as any).email) {
+      pEmail = (p.credentials as any).email;
     }
-
-    // 3. Fallback: search for merchant by name (email) in this organization
-    if (!existingMerchantId) {
-      const existingMerchantByName = await this.prisma.merchant.findFirst({
-        where: {
-          organizationId: data.organizationId,
-          name: data.email,
-        },
-        select: { id: true }
-      });
-      if (existingMerchantByName) {
-        existingMerchantId = existingMerchantByName.id;
-        this.logger.log(`♻️ Found existing merchant by name (email): ${existingMerchantId}`);
-      }
+    if (pEmail === data.email || p.accountIdentifier === data.email) {
+      existingMerchantId = p.merchantId;
+      this.logger.log(`♻️ Found existing merchant by Email: ${existingMerchantId}`);
+      break;
     }
-
-    if (existingMerchantId) {
-      effectiveMerchantId = existingMerchantId;
-    }
-
-    const defaultName = data.businessName ? data.businessName : `GPay ${data.email}`;
-    const merchant = await this.findOrCreateMerchant(
-      effectiveMerchantId,
-      data.organizationId,
-      defaultName,
-      data.isSuperAdmin,
-    );
-
-    // If we extracted a real business name but the merchant already existed with a Generic/Temp name, update it
-    let finalMerchantName = merchant.name;
-    const isGeneric = (name: string) => {
-      if (!name) return true;
-      const n = name.toLowerCase();
-      return (
-        n.startsWith("gpay ") ||
-        n === "learn more" ||
-        n.includes("staff access") ||
-        n.includes("pay for business") ||
-        n.includes("sign in") ||
-        n.includes("google pay") ||
-        n.includes("payment for business") ||
-        n.length < 3
-      );
-    };
-
-    const currentIsGeneric = isGeneric(merchant.name);
-    const newNameIsReal = data.businessName && !isGeneric(data.businessName);
-
-    if (newNameIsReal && (currentIsGeneric || !merchant.name)) {
-      await this.prisma.merchant.update({
-        where: { id: merchant.id },
-        data: { name: data.businessName, businessName: data.businessName },
-      });
-      finalMerchantName = data.businessName;
-    } else if (currentIsGeneric && !newNameIsReal) {
-      const fallbackName = data.email;
-      if (merchant.name !== fallbackName) {
-        await this.prisma.merchant.update({
-          where: { id: merchant.id },
-          data: { name: fallbackName, businessName: fallbackName },
-        });
-        finalMerchantName = fallbackName;
-      }
-    }
-
-    // Now look for the provider to update or create
-    const existing = await this.prisma.merchantProvider.findFirst({
-      where: {
-        merchantId: merchant.id,
-        providerType: ProviderType.GPAY,
-      },
-    });
-
-    if (existing) {
-      this.logger.log(`🔄 Updating existing provider ${existing.id} for merchant ${merchant.id}`);
-      const upiRegex =
-        /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-_]{2,64}$/;
-      const prevIdentifier = (existing.accountIdentifier || "").trim();
-      const incomingUpi = data.upiId?.trim();
-      const nextAccountIdentifier =
-        incomingUpi && upiRegex.test(incomingUpi)
-          ? incomingUpi
-          : prevIdentifier && upiRegex.test(prevIdentifier)
-            ? prevIdentifier
-            : data.email;
-
-      return await this.prisma.merchantProvider.update({
-        where: { id: existing.id },
-        data: {
-          accountIdentifier: nextAccountIdentifier,
-          credentials: {
-            ...((existing.credentials as any) || {}),
-            email: data.email,
-            businessId: data.businessId,
-          },
-          status: MerchantProviderStatus.ACTIVE,
-          isActive: true, // Ensure it's active
-          metadata: {
-            ...((existing.metadata as any) || {}),
-            merchantName: finalMerchantName,
-            lastSync: new Date(),
-            sessionType: 'persistent_browser',
-          },
-        },
-      });
-    }
-
-    this.logger.log(`🆕 Creating new provider for merchant ${merchant.id}`);
-    return await this.prisma.merchantProvider.create({
-      data: {
-        merchantId: merchant.id,
-        providerType: ProviderType.GPAY,
-        accountIdentifier: data.email,
-        credentials: {
-          email: data.email,
-          businessId: data.businessId,
-        },
-        status: MerchantProviderStatus.ACTIVE,
-        metadata: {
-          merchantName: finalMerchantName,
-          connectedAt: new Date(),
-          lastSync: new Date(),
-          sessionType: 'persistent_browser',
-        },
-      },
-    });
   }
+}
+
+if (existingMerchantId) {
+  effectiveMerchantId = existingMerchantId;
+}
+
+const merchant = await this.prisma.merchant.findUnique({
+  where: { id: effectiveMerchantId },
+});
+
+if (!merchant) {
+  throw new NotFoundException(`Merchant with ID ${effectiveMerchantId} not found`);
+}
+
+let finalMerchantName = merchant.name;
+
+const isGeneric = (name?: string | null) => {
+  if (!name) return true;
+  const n = name.toLowerCase();
+  return (
+    n.startsWith("gpay ") ||
+    n === "learn more" ||
+    n.includes("staff access") ||
+    n.includes("pay for business") ||
+    n.includes("sign in") ||
+    n.includes("google pay") ||
+    n.includes("payment for business") ||
+    n.length < 3
+  );
+};
+
+const currentIsGeneric = isGeneric(merchant.name);
+const newNameIsReal = data.businessName && !isGeneric(data.businessName);
+
+if (newNameIsReal && (currentIsGeneric || !merchant.name)) {
+  await this.prisma.merchant.update({
+    where: { id: merchant.id },
+    data: { name: data.businessName, businessName: data.businessName },
+  });
+  finalMerchantName = data.businessName;
+} else if (currentIsGeneric && !newNameIsReal) {
+  const fallbackName = data.email;
+  if (merchant.name !== fallbackName) {
+    await this.prisma.merchant.update({
+      where: { id: merchant.id },
+      data: { name: fallbackName, businessName: fallbackName },
+    });
+    finalMerchantName = fallbackName;
+  }
+}
+
+// Now look for the provider to update or create
+const existing = await this.prisma.merchantProvider.findFirst({
+  where: {
+    merchantId: merchant.id,
+    providerType: ProviderType.GPAY,
+  },
+});
+
+if (existing) {
+  this.logger.log(`🔄 Updating existing provider ${existing.id} for merchant ${merchant.id}`);
+  const upiRegex =
+    /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-_]{2,64}$/;
+  const prevIdentifier = (existing.accountIdentifier || "").trim();
+  const incomingUpi = data.upiId?.trim();
+  const nextAccountIdentifier =
+    incomingUpi && upiRegex.test(incomingUpi)
+      ? incomingUpi
+      : prevIdentifier && upiRegex.test(prevIdentifier)
+        ? prevIdentifier
+        : data.email;
+
+  return await this.prisma.merchantProvider.update({
+    where: { id: existing.id },
+    data: {
+      accountIdentifier: nextAccountIdentifier,
+      credentials: {
+        ...((existing.credentials as any) || {}),
+        email: data.email,
+        businessId: data.businessId,
+      },
+      status: MerchantProviderStatus.ACTIVE,
+      isActive: true, // Ensure it's active
+      metadata: {
+        ...((existing.metadata as any) || {}),
+        merchantName: finalMerchantName,
+        lastSync: new Date(),
+        sessionType: 'persistent_browser',
+        gpayRuntime: data.gpayRuntime || ((existing.metadata as any)?.gpayRuntime || 'LEGACY'),
+      },
+    },
+  });
+}
+
+this.logger.log(`🆕 Creating new provider for merchant ${merchant.id}`);
+return await this.prisma.merchantProvider.create({
+  data: {
+    merchantId: merchant.id,
+    providerType: ProviderType.GPAY,
+    accountIdentifier: data.email,
+    credentials: {
+      email: data.email,
+      businessId: data.businessId,
+    },
+    status: MerchantProviderStatus.ACTIVE,
+    metadata: {
+      merchantName: finalMerchantName,
+      connectedAt: new Date(),
+      lastSync: new Date(),
+      sessionType: 'persistent_browser',
+      gpayRuntime: data.gpayRuntime || 'LEGACY',
+    },
+  },
+});
+}
 
   private async detectAndExtractChallengesFromPage(page: any, content: string) {
-    let url = "";
-    try {
-      url = page.url();
-    } catch {
-      // ignore
-    }
-    try {
-      if (!content) {
-        content = await page.content();
-      }
-    } catch {
-      return null;
-    }
-
-    // Already on GPay dashboard = success, no challenge
-    if (url.includes("pay.google.com/g4b")) {
-      return null;
-    }
-    const isRejectedPage = url.includes("signin/rejected");
-
-    // Some flows land directly on passkey enrollment first; try to skip it.
-    const hasPasskeyPrompt =
-      content.includes("Simplify your sign-in") || url.includes("passkeyenrollment") || url.includes("recoveryoptions") || content.includes("Make sure you can always sign in");
-
-    const clickedNotNow = hasPasskeyPrompt
-      ? await this.tryClickPasskeyNotNow(page)
-      : await this.tryClickPasskeyNotNow(page, { forceFrameScan: true });
-
-    if (clickedNotNow) {
-      await new Promise((r) => setTimeout(r, 1800));
-      try {
-        content = await page.content();
-        url = page.url();
-      } catch {
-        // ignore and continue with previous snapshot
-      }
-    }
-
-    const lowerTop = (content || "").toLowerCase();
-    const isVerificationCodeFlow =
-      lowerTop.includes("verification code") ||
-      lowerTop.includes("get a verification code") ||
-      lowerTop.includes("recovery phone") ||
-      lowerTop.includes("choose how you want to sign in") ||
-      url.includes("challenge/selection") ||
-      url.includes("challenge/ipp");
-
-    if (isVerificationCodeFlow) {
-      // If this is the "choose how you want to sign in" screen, try to select
-      // "Get a verification code" so the subsequent code-entry UI appears.
-      const isMethodSelection =
-        lowerTop.includes("choose how you want to sign in") ||
-        url.includes("challenge/selection");
-
-      // DOM-based detection: Google’s code-entry screen contains a real OTP/code input.
-      // Text-based heuristics are unreliable across locales / layout changes.
-      let domDetect = await this.detectGoogleCodeEntryFromDom(page);
-      let isCodeEntryNow = domDetect.isCodeEntry;
-      if (domDetect.visibleCodeInputCount > 0) {
-        this.logger.log(
-          `🧩 [DIAGNOSTIC] GOOGLE_CODE DOM detected OTP inputs: ${domDetect.visibleCodeInputCount}`,
-        );
-      }
-
-      let attemptedAutoSelect = false;
-      if (isMethodSelection && !isCodeEntryNow) {
-        const clicked = await this.tryClickGetVerificationCode(page);
-        attemptedAutoSelect = attemptedAutoSelect || clicked;
-        if (clicked) {
-          // Wait for the next screen to load; Google can take a few seconds.
-          for (let i = 0; i < 6; i++) {
-            await new Promise((r) => setTimeout(r, 2500));
-            try {
-              url = page.url();
-              domDetect = await this.detectGoogleCodeEntryFromDom(page);
-              if (domDetect.isCodeEntry) {
-                isCodeEntryNow = true;
-                break;
-              }
-
-              // Fallback: also look at URL/text once in a while.
-              if (url.includes("challenge/ipp") || ((content || "").toLowerCase().includes("verification code") && ((content || "").toLowerCase().includes("enter") || (content || "").toLowerCase().includes("code")))) {
-                // Keep it as a weak fallback; DOM input remains the source of truth.
-                const lower = ((await page.content()) || "").toLowerCase();
-                const looksLikeCodeEntry =
-                  lower.includes("enter the code") ||
-                  lower.includes("enter the verification code") ||
-                  (lower.includes("verification code") && lower.includes("enter")) ||
-                  lower.includes("6-digit") ||
-                  lower.includes("one-time code");
-                if (looksLikeCodeEntry) {
-                  domDetect = await this.detectGoogleCodeEntryFromDom(page);
-                  if (domDetect.isCodeEntry) {
-                    isCodeEntryNow = true;
-                    break;
-                  }
-                }
-              }
-            } catch {
-              // ignore and keep waiting
-            }
-          }
+        let url = "";
+        try {
+          url = page.url();
+        } catch {
+          // ignore
         }
-      }
+        try {
+          if (!content) {
+            content = await page.content();
+          }
+        } catch {
+          return null;
+        }
 
-      return {
-        type: "GOOGLE_CODE",
-        message:
-          isCodeEntryNow
-            ? "Google is asking for a verification code. Enter the 6-digit code in this portal. We'll submit it automatically in headless mode."
-            : attemptedAutoSelect
-              ? "Google is still showing the method selection screen for verification code. Please click 'Get a verification code (Recovery phone)' on the Google page, then enter the code in this portal."
-              : "Google is asking for a verification code. On the Google page, choose 'Get a verification code' (recovery phone) if shown, then enter the code in this portal.",
-      };
-    }
+        // Already on GPay dashboard = success, no challenge
+        if (url.includes("pay.google.com/g4b")) {
+          return null;
+        }
+        const isRejectedPage = url.includes("signin/rejected");
 
-    // Page scraping logic for challenges - Google "Confirm it's you" / phone verification
-    const isGoogleVerificationPage =
-      content.includes("Confirm it's you") ||
-      content.includes("check your phone") ||
-      content.includes("Trying to sign in?") ||
-      content.includes("Match the number") ||
-      url.includes("challenge/dp") ||
-      url.includes("challenge/pwd") ||
-      url.includes("signin/challenge");
+        // Some flows land directly on passkey enrollment first; try to skip it.
+        const hasPasskeyPrompt =
+          content.includes("Simplify your sign-in") || url.includes("passkeyenrollment") || url.includes("recoveryoptions") || content.includes("Make sure you can always sign in");
 
-    if (isGoogleVerificationPage) {
-      if (content.toLowerCase().includes("try another way")) {
-        const switched = await this.tryClickTryAnotherWay(page);
-        if (switched) {
+        const clickedNotNow = hasPasskeyPrompt
+          ? await this.tryClickPasskeyNotNow(page)
+          : await this.tryClickPasskeyNotNow(page, { forceFrameScan: true });
+
+        if (clickedNotNow) {
           await new Promise((r) => setTimeout(r, 1800));
           try {
             content = await page.content();
             url = page.url();
           } catch {
-            // ignore
+            // ignore and continue with previous snapshot
           }
         }
-      }
 
-      // Extract prompt number from Google's page (2-3 digits: 32, 49, 77, 117, etc.)
-      const extracted = await page.evaluate(() => {
-        try {
-          let num: string | null = null;
-          const bodyText = document.body.innerText;
+        const lowerTop = (content || "").toLowerCase();
+        const isVerificationCodeFlow =
+          lowerTop.includes("verification code") ||
+          lowerTop.includes("get a verification code") ||
+          lowerTop.includes("recovery phone") ||
+          lowerTop.includes("choose how you want to sign in") ||
+          url.includes("challenge/selection") ||
+          url.includes("challenge/ipp");
 
-          // 1. Look for number in tappable/button elements (Google shows numbers as buttons)
-          const buttons = Array.from(document.querySelectorAll('[role="button"], button, div[tabindex]'));
-          for (const el of buttons) {
-            const text = (el.textContent || "").trim();
-            if (/^\d{2,3}$/.test(text)) {
-              num = text;
-              break;
-            }
+        if (isVerificationCodeFlow) {
+          // If this is the "choose how you want to sign in" screen, try to select
+          // "Get a verification code" so the subsequent code-entry UI appears.
+          const isMethodSelection =
+            lowerTop.includes("choose how you want to sign in") ||
+            url.includes("challenge/selection");
+
+          // DOM-based detection: Google’s code-entry screen contains a real OTP/code input.
+          // Text-based heuristics are unreliable across locales / layout changes.
+          let domDetect = await this.detectGoogleCodeEntryFromDom(page);
+          let isCodeEntryNow = domDetect.isCodeEntry;
+          if (domDetect.visibleCodeInputCount > 0) {
+            this.logger.log(
+              `🧩 [DIAGNOSTIC] GOOGLE_CODE DOM detected OTP inputs: ${domDetect.visibleCodeInputCount}`,
+            );
           }
 
-          // 2. Look for prominent numbers (large font, 2-3 digits)
-          if (!num) {
-            const all = Array.from(document.querySelectorAll("div, span, b, strong, button"));
-            for (const el of all) {
-              const text = el.textContent?.trim();
-              if (text && /^\d{2,3}$/.test(text)) {
-                const style = window.getComputedStyle(el);
-                const fs = parseInt(style.fontSize);
-                const fw = style.fontWeight;
-                if (fs >= 18 || parseInt(fw) >= 600) {
-                  num = text;
-                  break;
+          let attemptedAutoSelect = false;
+          if (isMethodSelection && !isCodeEntryNow) {
+            const clicked = await this.tryClickGetVerificationCode(page);
+            attemptedAutoSelect = attemptedAutoSelect || clicked;
+            if (clicked) {
+              // Wait for the next screen to load; Google can take a few seconds.
+              for (let i = 0; i < 6; i++) {
+                await new Promise((r) => setTimeout(r, 2500));
+                try {
+                  url = page.url();
+                  domDetect = await this.detectGoogleCodeEntryFromDom(page);
+                  if (domDetect.isCodeEntry) {
+                    isCodeEntryNow = true;
+                    break;
+                  }
+
+                  // Fallback: also look at URL/text once in a while.
+                  if (url.includes("challenge/ipp") || ((content || "").toLowerCase().includes("verification code") && ((content || "").toLowerCase().includes("enter") || (content || "").toLowerCase().includes("code")))) {
+                    // Keep it as a weak fallback; DOM input remains the source of truth.
+                    const lower = ((await page.content()) || "").toLowerCase();
+                    const looksLikeCodeEntry =
+                      lower.includes("enter the code") ||
+                      lower.includes("enter the verification code") ||
+                      (lower.includes("verification code") && lower.includes("enter")) ||
+                      lower.includes("6-digit") ||
+                      lower.includes("one-time code");
+                    if (looksLikeCodeEntry) {
+                      domDetect = await this.detectGoogleCodeEntryFromDom(page);
+                      if (domDetect.isCodeEntry) {
+                        isCodeEntryNow = true;
+                        break;
+                      }
+                    }
+                  }
+                } catch {
+                  // ignore and keep waiting
                 }
               }
             }
           }
 
-          // 3. Regex: "tap 32" or "select 32" or number in instruction text
-          if (!num) {
-            const m = bodyText.match(/(?:tap|select|choose|use)\s+(\d{2,3})\b/i) ||
-              bodyText.match(/\b(\d{2,3})\s+(?:on your phone|to verify)/i);
-            if (m) num = m[1];
-          }
-
-          // 4. Fallback: first 2-3 digit number in body
-          if (!num) {
-            const m = bodyText.match(/\b(\d{2,3})\b/);
-            if (m) num = m[1];
-          }
-
-          // Extract device names: "Google sent a notification to your Google Pixel 10, POCO C75 5G"
-          let devs: string[] = [];
-          const devMatch = bodyText.match(/notification to your ([^.]+?)(?:\.|Tap|Click|Select)/i);
-          if (devMatch) {
-            devs = devMatch[1].split(",").map((d) => d.trim()).filter(Boolean);
-          }
-          return { promptNumber: num, devices: devs };
-        } catch {
-          return { promptNumber: null, devices: [] };
+          return {
+            type: "GOOGLE_CODE",
+            message:
+              isCodeEntryNow
+                ? "Google is asking for a verification code. Enter the 6-digit code in this portal. We'll submit it automatically in headless mode."
+                : attemptedAutoSelect
+                  ? "Google is still showing the method selection screen for verification code. Please click 'Get a verification code (Recovery phone)' on the Google page, then enter the code in this portal."
+                  : "Google is asking for a verification code. On the Google page, choose 'Get a verification code' (recovery phone) if shown, then enter the code in this portal.",
+          };
         }
-      }).catch(() => ({ promptNumber: null, devices: [] }));
 
-      const { promptNumber, devices } = extracted;
+        // Page scraping logic for challenges - Google "Confirm it's you" / phone verification
+        const isGoogleVerificationPage =
+          content.includes("Confirm it's you") ||
+          content.includes("check your phone") ||
+          content.includes("Trying to sign in?") ||
+          content.includes("Match the number") ||
+          url.includes("challenge/dp") ||
+          url.includes("challenge/pwd") ||
+          url.includes("signin/challenge");
 
-      // If we found a prompt number OR the page text strongly suggests a phone prompt
-      if (promptNumber || content.includes("check your phone") || content.includes("tap Yes") || content.includes("confirmed it's you")) {
-        return {
-          type: "GOOGLE_PROMPT",
-          message: "Check your phone. Tap 'Yes' and then select the number shown below.",
-          promptNumber: promptNumber || "??",
-          devices: devices?.length ? devices : undefined,
-        };
+        if (isGoogleVerificationPage) {
+          if (content.toLowerCase().includes("try another way")) {
+            const switched = await this.tryClickTryAnotherWay(page);
+            if (switched) {
+              await new Promise((r) => setTimeout(r, 1800));
+              try {
+                content = await page.content();
+                url = page.url();
+              } catch {
+                // ignore
+              }
+            }
+          }
+
+          // Extract prompt number from Google's page (2-3 digits: 32, 49, 77, 117, etc.)
+          const extracted = await page.evaluate(() => {
+            try {
+              let num: string | null = null;
+              const bodyText = document.body.innerText;
+
+              // 1. Look for number in tappable/button elements (Google shows numbers as buttons)
+              const buttons = Array.from(document.querySelectorAll('[role="button"], button, div[tabindex]'));
+              for (const el of buttons) {
+                const text = (el.textContent || "").trim();
+                if (/^\d{2,3}$/.test(text)) {
+                  num = text;
+                  break;
+                }
+              }
+
+              // 2. Look for prominent numbers (large font, 2-3 digits)
+              if (!num) {
+                const all = Array.from(document.querySelectorAll("div, span, b, strong, button"));
+                for (const el of all) {
+                  const text = el.textContent?.trim();
+                  if (text && /^\d{2,3}$/.test(text)) {
+                    const style = window.getComputedStyle(el);
+                    const fs = parseInt(style.fontSize);
+                    const fw = style.fontWeight;
+                    if (fs >= 18 || parseInt(fw) >= 600) {
+                      num = text;
+                      break;
+                    }
+                  }
+                }
+              }
+
+              // 3. Regex: "tap 32" or "select 32" or number in instruction text
+              if (!num) {
+                const m = bodyText.match(/(?:tap|select|choose|use)\s+(\d{2,3})\b/i) ||
+                  bodyText.match(/\b(\d{2,3})\s+(?:on your phone|to verify)/i);
+                if (m) num = m[1];
+              }
+
+              // 4. Fallback: first 2-3 digit number in body
+              if (!num) {
+                const m = bodyText.match(/\b(\d{2,3})\b/);
+                if (m) num = m[1];
+              }
+
+              // Extract device names: "Google sent a notification to your Google Pixel 10, POCO C75 5G"
+              let devs: string[] = [];
+              const devMatch = bodyText.match(/notification to your ([^.]+?)(?:\.|Tap|Click|Select)/i);
+              if (devMatch) {
+                devs = devMatch[1].split(",").map((d) => d.trim()).filter(Boolean);
+              }
+              return { promptNumber: num, devices: devs };
+            } catch {
+              return { promptNumber: null, devices: [] };
+            }
+          }).catch(() => ({ promptNumber: null, devices: [] }));
+
+          const { promptNumber, devices } = extracted;
+
+          // If we found a prompt number OR the page text strongly suggests a phone prompt
+          if (promptNumber || content.includes("check your phone") || content.includes("tap Yes") || content.includes("confirmed it's you")) {
+            return {
+              type: "GOOGLE_PROMPT",
+              message: "Check your phone. Tap 'Yes' and then select the number shown below.",
+              promptNumber: promptNumber || "??",
+              devices: devices?.length ? devices : undefined,
+            };
+          }
+        }
+
+        // (code flow handling is prioritized above)
+
+        if (content.includes("passkey") || url.includes("passkeyenrollment")) {
+          return {
+            type: "RECAPTCHA", // Map to RECAPTCHA to reuse the confirm button flow
+            message:
+              "Google is asking for Passkey or Security confirmation. Please check your browser/phone, then click 'I've Confirmed' here.",
+          };
+        }
+
+        // Do NOT treat the normal password page as RECAPTCHA
+        const isPasswordPage = url.includes("challenge/pwd") && (
+          content.includes("Enter your password") ||
+          content.includes("Show password") ||
+          content.includes('type="password"')
+        );
+        if (isPasswordPage) return null;
+
+        if (
+          isRejectedPage ||
+          content.toLowerCase().includes("recaptcha") ||
+          content.includes("robot") ||
+          content.includes("g-recaptcha") ||
+          content.includes("unusual activity") ||
+          content.includes("not secure") ||
+          content.includes("About this page") ||
+          content.includes("unusual traffic")
+        ) {
+          return {
+            type: "RECAPTCHA",
+            message:
+              "Google has flagged this login as unusual. Please log in manually once on your browser/phone (or solve the CAPTCHA if shown below), then click 'I've Confirmed' here.",
+          };
+        }
+
+        return null;
+
+        return null;
       }
-    }
-
-    // (code flow handling is prioritized above)
-
-    if (content.includes("passkey") || url.includes("passkeyenrollment")) {
-      return {
-        type: "RECAPTCHA", // Map to RECAPTCHA to reuse the confirm button flow
-        message:
-          "Google is asking for Passkey or Security confirmation. Please check your browser/phone, then click 'I've Confirmed' here.",
-      };
-    }
-
-    // Do NOT treat the normal password page as RECAPTCHA
-    const isPasswordPage = url.includes("challenge/pwd") && (
-      content.includes("Enter your password") ||
-      content.includes("Show password") ||
-      content.includes('type="password"')
-    );
-    if (isPasswordPage) return null;
-
-    if (
-      isRejectedPage ||
-      content.toLowerCase().includes("recaptcha") ||
-      content.includes("robot") ||
-      content.includes("g-recaptcha") ||
-      content.includes("unusual activity") ||
-      content.includes("not secure") ||
-      content.includes("About this page") ||
-      content.includes("unusual traffic")
-    ) {
-      return {
-        type: "RECAPTCHA",
-        message:
-          "Google has flagged this login as unusual. Please log in manually once on your browser/phone (or solve the CAPTCHA if shown below), then click 'I've Confirmed' here.",
-      };
-    }
-
-    return null;
-
-    return null;
-  }
 
   /**
    * Click "Not now" on Google's passkey prompt ("Simplify your sign-in").
    * Returns true if clicked, false if button not found.
    */
   private async tryClickPasskeyNotNow(
-    page: any,
-    opts?: { forceFrameScan?: boolean },
-  ): Promise<boolean> {
-    try {
-      // If needed, scan across all frames for the actual "Not now" button.
-      // This is important because Google sometimes renders the passkey prompt in an iframe.
-      const scanFrames = async () => {
-        const frames = typeof page.frames === "function" ? page.frames() : [];
-        for (const frame of frames) {
-          try {
-            const frameUrl = frame.url?.() || "";
-            // Keep it scoped: only accounts.google.com style frames.
-            if (!/accounts\.google\.com/i.test(frameUrl) && !/google/i.test(frameUrl)) continue;
+        page: any,
+        opts?: { forceFrameScan?: boolean },
+      ): Promise<boolean> {
+        try {
+          // If needed, scan across all frames for the actual "Not now" button.
+          // This is important because Google sometimes renders the passkey prompt in an iframe.
+          const scanFrames = async () => {
+            const frames = typeof page.frames === "function" ? page.frames() : [];
+            for (const frame of frames) {
+              try {
+                const frameUrl = frame.url?.() || "";
+                // Keep it scoped: only accounts.google.com style frames.
+                if (!/accounts\.google\.com/i.test(frameUrl) && !/google/i.test(frameUrl)) continue;
 
-            if (typeof frame.getByRole === "function") {
-              const btn = frame.getByRole("button", { name: /not now/i });
-              await btn.click({ timeout: 1200 }).catch(() => { });
-              // If no exception, we likely clicked.
-              return true;
-            }
-
-            const clicked = await frame.evaluate(() => {
-              const targets = ["not now", "skip", "no thanks", "maybe later", "cancel"];
-              const all = Array.from(
-                document.querySelectorAll('button, [role="button"], a, span, div'),
-              );
-              for (const el of all) {
-                const text = (el.textContent || "").trim().toLowerCase();
-                if (targets.some((t) => text === t || text.startsWith(t))) {
-                  const parent =
-                    (el as HTMLElement).closest?.("button, [role='button'], a") || el;
-                  (parent as HTMLElement).click?.();
+                if (typeof frame.getByRole === "function") {
+                  const btn = frame.getByRole("button", { name: /not now/i });
+                  await btn.click({ timeout: 1200 }).catch(() => { });
+                  // If no exception, we likely clicked.
                   return true;
                 }
+
+                const clicked = await frame.evaluate(() => {
+                  const targets = ["not now", "skip", "no thanks", "maybe later", "cancel"];
+                  const all = Array.from(
+                    document.querySelectorAll('button, [role="button"], a, span, div'),
+                  );
+                  for (const el of all) {
+                    const text = (el.textContent || "").trim().toLowerCase();
+                    if (targets.some((t) => text === t || text.startsWith(t))) {
+                      const parent =
+                        (el as HTMLElement).closest?.("button, [role='button'], a") || el;
+                      (parent as HTMLElement).click?.();
+                      return true;
+                    }
+                  }
+                  return false;
+                }).catch(() => false);
+
+                if (clicked) return true;
+              } catch {
+                // ignore and continue to next frame
               }
-              return false;
-            }).catch(() => false);
+            }
+            return false;
+          };
 
-            if (clicked) return true;
-          } catch {
-            // ignore and continue to next frame
+          if (opts?.forceFrameScan) {
+            return await scanFrames();
           }
-        }
-        return false;
-      };
 
-      if (opts?.forceFrameScan) {
-        return await scanFrames();
-      }
-
-      // Prefer Playwright role-based selectors (more reliable than raw DOM scanning).
-      // This handles cases where the visible text is nested or changes slightly.
-      try {
-        if (typeof page.getByRole === "function") {
-          const btn = page.getByRole("button", { name: /not now|cancel|skip|no thanks/i });
-          await btn.click({ timeout: 1500 }).catch(() => { });
-          // If click didn't throw, assume success.
-          return true;
-        }
-      } catch {
-        // fall back
-      }
-
-      try {
-        if (typeof page.locator === "function") {
-          const loc = page.locator("button:has-text(\"Not now\"), [role='button']:has-text(\"Not now\")");
-          const count = await loc.count().catch(() => 0);
-          if (count > 0) {
-            await loc.first().click({ timeout: 1500 }).catch(() => { });
-            return true;
-          }
-        }
-      } catch {
-        // fall back
-      }
-
-      const clicked = await page.evaluate(() => {
-        const targets = ["not now", "skip", "no thanks", "maybe later"];
-        const all = Array.from(document.querySelectorAll('button, [role="button"], a, span, div'));
-        for (const el of all) {
-          const text = (el.textContent || "").trim().toLowerCase();
-          if (targets.some((t) => text === t || text.startsWith(t))) {
-            const parent = (el as HTMLElement).closest?.("button, [role='button'], a") || el;
-            if ((parent as HTMLElement).click) {
-              (parent as HTMLElement).click();
+          // Prefer Playwright role-based selectors (more reliable than raw DOM scanning).
+          // This handles cases where the visible text is nested or changes slightly.
+          try {
+            if (typeof page.getByRole === "function") {
+              const btn = page.getByRole("button", { name: /not now|cancel|skip|no thanks/i });
+              await btn.click({ timeout: 1500 }).catch(() => { });
+              // If click didn't throw, assume success.
               return true;
             }
-            (el as HTMLElement).click?.();
-            return true;
+          } catch {
+            // fall back
           }
-        }
-        return false;
-      });
-      if (clicked) return true;
 
-      // Last resort: scan frames.
-      return await scanFrames();
-    } catch {
-      return false;
-    }
-  }
+          try {
+            if (typeof page.locator === "function") {
+              const loc = page.locator("button:has-text(\"Not now\"), [role='button']:has-text(\"Not now\")");
+              const count = await loc.count().catch(() => 0);
+              if (count > 0) {
+                await loc.first().click({ timeout: 1500 }).catch(() => { });
+                return true;
+              }
+            }
+          } catch {
+            // fall back
+          }
+
+          const clicked = await page.evaluate(() => {
+            const targets = ["not now", "skip", "no thanks", "maybe later"];
+            const all = Array.from(document.querySelectorAll('button, [role="button"], a, span, div'));
+            for (const el of all) {
+              const text = (el.textContent || "").trim().toLowerCase();
+              if (targets.some((t) => text === t || text.startsWith(t))) {
+                const parent = (el as HTMLElement).closest?.("button, [role='button'], a") || el;
+                if ((parent as HTMLElement).click) {
+                  (parent as HTMLElement).click();
+                  return true;
+                }
+                (el as HTMLElement).click?.();
+                return true;
+              }
+            }
+            return false;
+          });
+          if (clicked) return true;
+
+          // Last resort: scan frames.
+          return await scanFrames();
+        } catch {
+          return false;
+        }
+      }
 
   /**
    * Detect the Google "confirm your phone number" step and (optionally) fill it.
    * Returns true if the UI was detected (and handled if phone provided).
    */
   private async detectAndHandleGooglePhoneNumber(
-    page: any,
-    phoneNumber?: string,
-  ): Promise<{ detected: boolean; submitted: boolean }> {
-    try {
-      const detected = await page.evaluate(() => {
-        const norm = (s: string) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
-        const body = norm(document.body?.innerText || "");
-        if (!body.includes("get a verification code")) return false;
-        if (!body.includes("phone number")) return false;
-        const input = document.querySelector("input[type='tel'], input[autocomplete='tel'], input[aria-label*='Phone number' i]") as HTMLInputElement | null;
-        return !!input;
-      }).catch(() => false);
+        page: any,
+        phoneNumber?: string,
+      ): Promise<{ detected: boolean; submitted: boolean }> {
+        try {
+          const detected = await page.evaluate(() => {
+            const norm = (s: string) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+            const body = norm(document.body?.innerText || "");
+            if (!body.includes("get a verification code")) return false;
+            if (!body.includes("phone number")) return false;
+            const input = document.querySelector("input[type='tel'], input[autocomplete='tel'], input[aria-label*='Phone number' i]") as HTMLInputElement | null;
+            return !!input;
+          }).catch(() => false);
 
-      if (!detected) return { detected: false, submitted: false };
-      if (!phoneNumber?.trim()) return { detected: true, submitted: false };
+          if (!detected) return { detected: false, submitted: false };
+          if (!phoneNumber?.trim()) return { detected: true, submitted: false };
 
-      const cleaned = phoneNumber.replace(/\D/g, "");
-      const submitted = await page.evaluate((num: string) => {
-        const input =
-          (document.querySelector("input[type='tel']") as HTMLInputElement | null) ||
-          (document.querySelector("input[autocomplete='tel']") as HTMLInputElement | null) ||
-          (document.querySelector("input[aria-label*='Phone number' i]") as HTMLInputElement | null);
-        if (!input) return false;
-        input.focus();
-        input.value = "";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.value = num;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
+          const cleaned = phoneNumber.replace(/\D/g, "");
+          const submitted = await page.evaluate((num: string) => {
+            const input =
+              (document.querySelector("input[type='tel']") as HTMLInputElement | null) ||
+              (document.querySelector("input[autocomplete='tel']") as HTMLInputElement | null) ||
+              (document.querySelector("input[aria-label*='Phone number' i]") as HTMLInputElement | null);
+            if (!input) return false;
+            input.focus();
+            input.value = "";
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            input.value = num;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
 
-        const norm = (s: string) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
-        const candidates = Array.from(document.querySelectorAll("button, [role='button']")) as HTMLElement[];
-        const send = candidates.find((b) => norm(b.innerText || b.textContent || "").includes("send"));
-        if (send) {
-          send.click();
-          return true;
+            const norm = (s: string) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+            const candidates = Array.from(document.querySelectorAll("button, [role='button']")) as HTMLElement[];
+            const send = candidates.find((b) => norm(b.innerText || b.textContent || "").includes("send"));
+            if (send) {
+              send.click();
+              return true;
+            }
+            return false;
+          }, cleaned).catch(() => false);
+
+          return { detected: true, submitted: !!submitted };
+        } catch {
+          return { detected: false, submitted: false };
         }
-        return false;
-      }, cleaned).catch(() => false);
-
-      return { detected: true, submitted: !!submitted };
-    } catch {
-      return { detected: false, submitted: false };
-    }
-  }
+      }
 
   /**
    * Try to click the action button on Google's challenge page.
@@ -1760,237 +1787,76 @@ export class GpayService implements OnModuleDestroy {
    * Called when user has done manual login on browser/phone and clicks retry.
    */
   private async tryClickVerificationConfirmed(page: any): Promise<boolean> {
-    try {
-      const clicked = await page.evaluate(() => {
-        const targets = ["try again", "i've confirmed", "try again later"];
-        const all = Array.from(
-          document.querySelectorAll('button, [role="button"], a'),
-        );
-        // Prefer buttons/links with exact or near-exact text
-        for (const el of all) {
-          const text = (el.textContent || "").trim().toLowerCase();
-          if (targets.some((t) => text === t || text.startsWith(t))) {
-            (el as HTMLElement).click();
-            return true;
-          }
+        try {
+          const clicked = await page.evaluate(() => {
+            const targets = ["try again", "i've confirmed", "try again later"];
+            const all = Array.from(
+              document.querySelectorAll('button, [role="button"], a'),
+            );
+            // Prefer buttons/links with exact or near-exact text
+            for (const el of all) {
+              const text = (el.textContent || "").trim().toLowerCase();
+              if (targets.some((t) => text === t || text.startsWith(t))) {
+                (el as HTMLElement).click();
+                return true;
+              }
+            }
+            // Fallback: check span/div (e.g. text inside a button)
+            const fallback = Array.from(
+              document.querySelectorAll('span, div'),
+            );
+            for (const el of fallback) {
+              const text = (el.textContent || "").trim().toLowerCase();
+              if (targets.some((t) => text === t) && (el as HTMLElement).offsetParent !== null) {
+                (el as HTMLElement).click();
+                return true;
+              }
+            }
+            return false;
+          });
+          if (clicked) this.logger.log("✅ Clicked action button (Try again / I've Confirmed)");
+          return clicked;
+        } catch (e) {
+          this.logger.warn("Could not find/click action button:", e);
+          return false;
         }
-        // Fallback: check span/div (e.g. text inside a button)
-        const fallback = Array.from(
-          document.querySelectorAll('span, div'),
-        );
-        for (const el of fallback) {
-          const text = (el.textContent || "").trim().toLowerCase();
-          if (targets.some((t) => text === t) && (el as HTMLElement).offsetParent !== null) {
-            (el as HTMLElement).click();
-            return true;
-          }
-        }
-        return false;
-      });
-      if (clicked) this.logger.log("✅ Clicked action button (Try again / I've Confirmed)");
-      return clicked;
-    } catch (e) {
-      this.logger.warn("Could not find/click action button:", e);
-      return false;
-    }
-  }
+      }
 
   /**
    * Click "Try another way" when Google challenge supports alternate methods.
    */
   private async tryClickTryAnotherWay(page: any): Promise<boolean> {
-    try {
-      const clicked = await page.evaluate(() => {
-        const targets = ["try another way", "another way", "choose another option"];
-        const all = Array.from(document.querySelectorAll("button, [role='button'], a, span, div"));
-        for (const el of all) {
-          const text = (el.textContent || "").trim().toLowerCase();
-          if (!text) continue;
-          if (targets.some((t) => text === t || text.includes(t))) {
-            const clickable =
-              (el as HTMLElement).closest?.("button, [role='button'], a") || el;
-            (clickable as HTMLElement).click?.();
-            return true;
-          }
+        try {
+          const clicked = await page.evaluate(() => {
+            const targets = ["try another way", "another way", "choose another option"];
+            const all = Array.from(document.querySelectorAll("button, [role='button'], a, span, div"));
+            for (const el of all) {
+              const text = (el.textContent || "").trim().toLowerCase();
+              if (!text) continue;
+              if (targets.some((t) => text === t || text.includes(t))) {
+                const clickable =
+                  (el as HTMLElement).closest?.("button, [role='button'], a") || el;
+                (clickable as HTMLElement).click?.();
+                return true;
+              }
+            }
+            return false;
+          });
+          if (clicked) this.logger.log("✅ Clicked 'Try another way' on Google challenge");
+          return !!clicked;
+        } catch {
+          return false;
         }
-        return false;
-      });
-      if (clicked) this.logger.log("✅ Clicked 'Try another way' on Google challenge");
-      return !!clicked;
-    } catch {
-      return false;
-    }
-  }
+      }
 
   /**
    * Click the "Get a verification code" option on Google's "choose how you want to sign in"
    * screen (when alternate verification method is requested).
    */
   private async tryClickGetVerificationCode(page: any): Promise<boolean> {
-    try {
-      const clicked = await page.evaluate(() => {
-        const norm = (s: string) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
-        const isVisible = (el: HTMLElement) => {
-          const rects = el.getClientRects();
-          if (!rects || rects.length === 0) return false;
-          const style = window.getComputedStyle(el);
-          if (!style) return true;
-          if (style.display === "none") return false;
-          if (style.visibility === "hidden") return false;
-          if (style.opacity === "0") return false;
-          return true;
-        };
-
-        const bodyText = norm(document.body?.innerText || "");
-        if (!bodyText.includes("choose how you want to sign in")) {
-          // Avoid clicking random "verification code" text on non-selection pages.
-          return false;
-        }
-
-        // Prefer clicking the actual option row that contains BOTH:
-        // - "Get a verification code"
-        // - "Recovery phone"
-        // This matches the UI you screenshotted.
-        const optionCandidates = Array.from(
-          document.querySelectorAll("div[role='link'], div[role='button'], button, [role='button'], a"),
-        ).filter((el) => isVisible(el as HTMLElement));
-
-        const pickBest = () => {
-          let best: HTMLElement | null = null;
-          for (const el of optionCandidates) {
-            const t = norm((el as HTMLElement).innerText || (el as HTMLElement).textContent || "");
-            if (!t) continue;
-            if (t.includes("get a verification code") && t.includes("recovery phone")) {
-              best = el as HTMLElement;
-              break;
-            }
-          }
-          if (best) return best;
-
-          // Fallback: any visible element mentioning "get a verification code"
-          for (const el of optionCandidates) {
-            const t = norm((el as HTMLElement).innerText || (el as HTMLElement).textContent || "");
-            if (t.includes("get a verification code")) return el as HTMLElement;
-          }
-          return null;
-        };
-
-        const target = pickBest();
-        if (!target) return false;
-
-        // Ensure we click a clickable ancestor if text is nested.
-        const clickable =
-          target.closest?.("div[role='link'], div[role='button'], button, [role='button'], a") || target;
-        (clickable as HTMLElement).click?.();
-        return true;
-      });
-
-      if (clicked) this.logger.log("✅ Clicked 'Get a verification code' on Google challenge");
-      return !!clicked;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * DOM-based detection for Google "enter verification code" screen.
-   * We detect OTP/code inputs (one-time-code / numeric / tel + visible).
-   */
-  private async detectGoogleCodeEntryFromDom(page: any): Promise<{
-    isCodeEntry: boolean;
-    visibleCodeInputCount: number;
-  }> {
-    try {
-      const detectInDocument = () => {
-        const isVisible = (el: HTMLElement) => {
-          const rects = el.getClientRects();
-          if (!rects || rects.length === 0) return false;
-          const style = window.getComputedStyle(el);
-          if (!style) return true;
-          if (style.display === "none") return false;
-          if (style.visibility === "hidden") return false;
-          if (style.opacity === "0") return false;
-          return true;
-        };
-
-        const lowerBody = (document.body?.innerText || "").toLowerCase();
-
-        const candidates = Array.from(document.querySelectorAll("input")).filter((el) => {
-          const input = el as HTMLInputElement;
-          if (!isVisible(input)) return false;
-
-          const autocomplete = (input.getAttribute("autocomplete") || "").toLowerCase();
-          const type = (input.getAttribute("type") || "").toLowerCase();
-          const inputMode = (input.getAttribute("inputmode") || "").toLowerCase();
-          const name = (input.getAttribute("name") || "").toLowerCase();
-          const id = (input.id || "").toLowerCase();
-          const aria = (input.getAttribute("aria-label") || "").toLowerCase();
-          const placeholder = (input.getAttribute("placeholder") || "").toLowerCase();
-
-          const looksOtp =
-            autocomplete.includes("one-time-code") ||
-            type === "tel" ||
-            inputMode === "numeric" ||
-            name.includes("code") ||
-            id.includes("code") ||
-            aria.includes("code") ||
-            placeholder.includes("code");
-
-          const isLikelyCodeContext =
-            lowerBody.includes("verification code") ||
-            lowerBody.includes("one-time code") ||
-            lowerBody.includes("recovery phone") ||
-            (lowerBody.includes("enter") && lowerBody.includes("code"));
-
-          return looksOtp && isLikelyCodeContext;
-        });
-
-        return {
-          visibleCodeInputCount: candidates.length,
-        };
-      };
-
-      // 1) Main document first
-      const main = await page.evaluate(detectInDocument).catch(() => ({ visibleCodeInputCount: 0 }));
-      if (main?.visibleCodeInputCount > 0) {
-        return { isCodeEntry: true, visibleCodeInputCount: Number(main.visibleCodeInputCount || 0) };
-      }
-
-      // 2) Then scan iframes (Google often hosts verification UI inside an iframe)
-      const frames = typeof page.frames === "function" ? page.frames() : [];
-      for (const frame of frames) {
-        // Heuristic: only check frames that look like Google sign-in/challenge
         try {
-          const frameUrl = frame.url?.() || "";
-          if (!/accounts\.google\.com|signin|challenge|g4b/i.test(frameUrl)) continue;
-        } catch {
-          // ignore
-        }
-
-        const inFrame = await frame.evaluate(detectInDocument).catch(() => ({ visibleCodeInputCount: 0 }));
-        if (inFrame?.visibleCodeInputCount > 0) {
-          return { isCodeEntry: true, visibleCodeInputCount: Number(inFrame.visibleCodeInputCount || 0) };
-        }
-      }
-
-      return { isCodeEntry: false, visibleCodeInputCount: 0 };
-    } catch {
-      return { isCodeEntry: false, visibleCodeInputCount: 0 };
-    }
-  }
-
-  /**
-   * Headless-compatible: fill the Google verification code inside Google (including iframes)
-   * and try to click "Verify"/"Next".
-   */
-  private async tryFillGoogleCodeAndSubmit(page: any, code: string): Promise<boolean> {
-    const cleaned = (code || "").replace(/\D/g, "");
-    if (!cleaned) return false;
-
-    const tryInFrame = async (frame: any): Promise<boolean> => {
-      try {
-        return await frame.evaluate((codeInner: string) => {
-          try {
+          const clicked = await page.evaluate(() => {
+            const norm = (s: string) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
             const isVisible = (el: HTMLElement) => {
               const rects = el.getClientRects();
               if (!rects || rects.length === 0) return false;
@@ -2002,10 +1868,81 @@ export class GpayService implements OnModuleDestroy {
               return true;
             };
 
-            const digits = (codeInner || "").replace(/\D/g, "");
-            if (!digits) return false;
+            const bodyText = norm(document.body?.innerText || "");
+            if (!bodyText.includes("choose how you want to sign in")) {
+              // Avoid clicking random "verification code" text on non-selection pages.
+              return false;
+            }
 
-            const inputs = Array.from(document.querySelectorAll("input")).filter((el) => {
+            // Prefer clicking the actual option row that contains BOTH:
+            // - "Get a verification code"
+            // - "Recovery phone"
+            // This matches the UI you screenshotted.
+            const optionCandidates = Array.from(
+              document.querySelectorAll("div[role='link'], div[role='button'], button, [role='button'], a"),
+            ).filter((el) => isVisible(el as HTMLElement));
+
+            const pickBest = () => {
+              let best: HTMLElement | null = null;
+              for (const el of optionCandidates) {
+                const t = norm((el as HTMLElement).innerText || (el as HTMLElement).textContent || "");
+                if (!t) continue;
+                if (t.includes("get a verification code") && t.includes("recovery phone")) {
+                  best = el as HTMLElement;
+                  break;
+                }
+              }
+              if (best) return best;
+
+              // Fallback: any visible element mentioning "get a verification code"
+              for (const el of optionCandidates) {
+                const t = norm((el as HTMLElement).innerText || (el as HTMLElement).textContent || "");
+                if (t.includes("get a verification code")) return el as HTMLElement;
+              }
+              return null;
+            };
+
+            const target = pickBest();
+            if (!target) return false;
+
+            // Ensure we click a clickable ancestor if text is nested.
+            const clickable =
+              target.closest?.("div[role='link'], div[role='button'], button, [role='button'], a") || target;
+            (clickable as HTMLElement).click?.();
+            return true;
+          });
+
+          if (clicked) this.logger.log("✅ Clicked 'Get a verification code' on Google challenge");
+          return !!clicked;
+        } catch {
+          return false;
+        }
+      }
+
+  /**
+   * DOM-based detection for Google "enter verification code" screen.
+   * We detect OTP/code inputs (one-time-code / numeric / tel + visible).
+   */
+  private async detectGoogleCodeEntryFromDom(page: any): Promise<{
+        isCodeEntry: boolean;
+        visibleCodeInputCount: number;
+      }> {
+        try {
+          const detectInDocument = () => {
+            const isVisible = (el: HTMLElement) => {
+              const rects = el.getClientRects();
+              if (!rects || rects.length === 0) return false;
+              const style = window.getComputedStyle(el);
+              if (!style) return true;
+              if (style.display === "none") return false;
+              if (style.visibility === "hidden") return false;
+              if (style.opacity === "0") return false;
+              return true;
+            };
+
+            const lowerBody = (document.body?.innerText || "").toLowerCase();
+
+            const candidates = Array.from(document.querySelectorAll("input")).filter((el) => {
               const input = el as HTMLInputElement;
               if (!isVisible(input)) return false;
 
@@ -2020,486 +1957,661 @@ export class GpayService implements OnModuleDestroy {
               const looksOtp =
                 autocomplete.includes("one-time-code") ||
                 type === "tel" ||
-                inputMode.includes("numeric") ||
+                inputMode === "numeric" ||
                 name.includes("code") ||
                 id.includes("code") ||
                 aria.includes("code") ||
                 placeholder.includes("code");
 
-              return looksOtp;
+              const isLikelyCodeContext =
+                lowerBody.includes("verification code") ||
+                lowerBody.includes("one-time code") ||
+                lowerBody.includes("recovery phone") ||
+                (lowerBody.includes("enter") && lowerBody.includes("code"));
+
+              return looksOtp && isLikelyCodeContext;
             });
 
-            if (!inputs.length) return false;
-
-            const setInputValue = (input: HTMLInputElement, val: string) => {
-              input.focus();
-              input.value = "";
-              input.dispatchEvent(new Event("input", { bubbles: true }));
-              input.value = val;
-              input.dispatchEvent(new Event("input", { bubbles: true }));
-              input.dispatchEvent(new Event("change", { bubbles: true }));
+            return {
+              visibleCodeInputCount: candidates.length,
             };
+          };
 
-            const allSingleDigit = inputs.every((i) => {
-              const inp = i as HTMLInputElement;
-              const ml = inp.maxLength || parseInt(inp.getAttribute("maxlength") || "0", 10) || 0;
-              return ml === 1;
-            });
+          // 1) Main document first
+          const main = await page.evaluate(detectInDocument).catch(() => ({ visibleCodeInputCount: 0 }));
+          if (main?.visibleCodeInputCount > 0) {
+            return { isCodeEntry: true, visibleCodeInputCount: Number(main.visibleCodeInputCount || 0) };
+          }
 
-            if (allSingleDigit && inputs.length >= 2) {
-              const chars = digits.split("");
-              for (let i = 0; i < inputs.length; i++) {
-                const ch = chars[i] || "";
-                setInputValue(inputs[i] as HTMLInputElement, ch);
+          // 2) Then scan iframes (Google often hosts verification UI inside an iframe)
+          const frames = typeof page.frames === "function" ? page.frames() : [];
+          for (const frame of frames) {
+            // Heuristic: only check frames that look like Google sign-in/challenge
+            try {
+              const frameUrl = frame.url?.() || "";
+              if (!/accounts\.google\.com|signin|challenge|g4b/i.test(frameUrl)) continue;
+            } catch {
+              // ignore
+            }
+
+            const inFrame = await frame.evaluate(detectInDocument).catch(() => ({ visibleCodeInputCount: 0 }));
+            if (inFrame?.visibleCodeInputCount > 0) {
+              return { isCodeEntry: true, visibleCodeInputCount: Number(inFrame.visibleCodeInputCount || 0) };
+            }
+          }
+
+          return { isCodeEntry: false, visibleCodeInputCount: 0 };
+        } catch {
+          return { isCodeEntry: false, visibleCodeInputCount: 0 };
+        }
+      }
+
+  /**
+   * Headless-compatible: fill the Google verification code inside Google (including iframes)
+   * and try to click "Verify"/"Next".
+   */
+  private async tryFillGoogleCodeAndSubmit(page: any, code: string): Promise<boolean> {
+        const cleaned = (code || "").replace(/\D/g, "");
+        if (!cleaned) return false;
+
+        const tryInFrame = async (frame: any): Promise<boolean> => {
+          try {
+            return await frame.evaluate((codeInner: string) => {
+              try {
+                const isVisible = (el: HTMLElement) => {
+                  const rects = el.getClientRects();
+                  if (!rects || rects.length === 0) return false;
+                  const style = window.getComputedStyle(el);
+                  if (!style) return true;
+                  if (style.display === "none") return false;
+                  if (style.visibility === "hidden") return false;
+                  if (style.opacity === "0") return false;
+                  return true;
+                };
+
+                const digits = (codeInner || "").replace(/\D/g, "");
+                if (!digits) return false;
+
+                const inputs = Array.from(document.querySelectorAll("input")).filter((el) => {
+                  const input = el as HTMLInputElement;
+                  if (!isVisible(input)) return false;
+
+                  const autocomplete = (input.getAttribute("autocomplete") || "").toLowerCase();
+                  const type = (input.getAttribute("type") || "").toLowerCase();
+                  const inputMode = (input.getAttribute("inputmode") || "").toLowerCase();
+                  const name = (input.getAttribute("name") || "").toLowerCase();
+                  const id = (input.id || "").toLowerCase();
+                  const aria = (input.getAttribute("aria-label") || "").toLowerCase();
+                  const placeholder = (input.getAttribute("placeholder") || "").toLowerCase();
+
+                  const looksOtp =
+                    autocomplete.includes("one-time-code") ||
+                    type === "tel" ||
+                    inputMode.includes("numeric") ||
+                    name.includes("code") ||
+                    id.includes("code") ||
+                    aria.includes("code") ||
+                    placeholder.includes("code");
+
+                  return looksOtp;
+                });
+
+                if (!inputs.length) return false;
+
+                const setInputValue = (input: HTMLInputElement, val: string) => {
+                  input.focus();
+                  input.value = "";
+                  input.dispatchEvent(new Event("input", { bubbles: true }));
+                  input.value = val;
+                  input.dispatchEvent(new Event("input", { bubbles: true }));
+                  input.dispatchEvent(new Event("change", { bubbles: true }));
+                };
+
+                const allSingleDigit = inputs.every((i) => {
+                  const inp = i as HTMLInputElement;
+                  const ml = inp.maxLength || parseInt(inp.getAttribute("maxlength") || "0", 10) || 0;
+                  return ml === 1;
+                });
+
+                if (allSingleDigit && inputs.length >= 2) {
+                  const chars = digits.split("");
+                  for (let i = 0; i < inputs.length; i++) {
+                    const ch = chars[i] || "";
+                    setInputValue(inputs[i] as HTMLInputElement, ch);
+                  }
+                } else {
+                  setInputValue(inputs[0] as HTMLInputElement, digits);
+                }
+
+                const buttons = Array.from(
+                  document.querySelectorAll("button, [role='button'], input[type='submit']"),
+                ).filter((el) => isVisible(el as HTMLElement));
+
+                const normText = (t: string) => (t || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+                const clickBtn = buttons.find((el) => {
+                  const text =
+                    (el as HTMLElement).getAttribute("aria-label") ||
+                    (el as HTMLElement).textContent ||
+                    (el as HTMLInputElement).value ||
+                    "";
+                  const n = normText(text);
+                  return n.includes("verify") || n.includes("next") || n.includes("done") || n.includes("continue");
+                }) as HTMLElement | undefined;
+
+                if (clickBtn?.click) {
+                  clickBtn.click();
+                  return true;
+                }
+
+                // Fallback: press Enter on the first input
+                const first = inputs[0] as HTMLInputElement;
+                first.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+                return true;
+              } catch {
+                return false;
               }
-            } else {
-              setInputValue(inputs[0] as HTMLInputElement, digits);
-            }
-
-            const buttons = Array.from(
-              document.querySelectorAll("button, [role='button'], input[type='submit']"),
-            ).filter((el) => isVisible(el as HTMLElement));
-
-            const normText = (t: string) => (t || "").replace(/\s+/g, " ").trim().toLowerCase();
-
-            const clickBtn = buttons.find((el) => {
-              const text =
-                (el as HTMLElement).getAttribute("aria-label") ||
-                (el as HTMLElement).textContent ||
-                (el as HTMLInputElement).value ||
-                "";
-              const n = normText(text);
-              return n.includes("verify") || n.includes("next") || n.includes("done") || n.includes("continue");
-            }) as HTMLElement | undefined;
-
-            if (clickBtn?.click) {
-              clickBtn.click();
-              return true;
-            }
-
-            // Fallback: press Enter on the first input
-            const first = inputs[0] as HTMLInputElement;
-            first.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
-            return true;
+            }, cleaned);
           } catch {
             return false;
           }
-        }, cleaned);
-      } catch {
+        };
+
+        // 1) Try main document first
+        if (await tryInFrame(page)) return true;
+
+        // 2) Then scan iframes (Google verification UI is often hosted in an iframe)
+        const frames = typeof page.frames === "function" ? page.frames() : [];
+        for (const frame of frames) {
+          try {
+            const frameUrl = frame.url?.() || "";
+            if (frameUrl && !/accounts\.google\.com|signin|challenge|google/i.test(frameUrl)) continue;
+          } catch {
+            // ignore frameUrl errors
+          }
+
+          if (await tryInFrame(frame)) return true;
+        }
+
         return false;
       }
-    };
-
-    // 1) Try main document first
-    if (await tryInFrame(page)) return true;
-
-    // 2) Then scan iframes (Google verification UI is often hosted in an iframe)
-    const frames = typeof page.frames === "function" ? page.frames() : [];
-    for (const frame of frames) {
-      try {
-        const frameUrl = frame.url?.() || "";
-        if (frameUrl && !/accounts\.google\.com|signin|challenge|google/i.test(frameUrl)) continue;
-      } catch {
-        // ignore frameUrl errors
-      }
-
-      if (await tryInFrame(frame)) return true;
-    }
-
-    return false;
-  }
 
   /**
    * Detect challenges in GPay/Google RPC responses
    */
   detectAndExtractChallenges(responseData: any) {
-    if (!responseData || !Array.isArray(responseData)) return null;
+        if (!responseData || !Array.isArray(responseData)) return null;
 
-    // Look for B4hajb or oHUEyd patterns
-    const b4hajbResult = responseData.find(
-      (item: any) => item[0] === "wrb.fr" && item[1] === "B4hajb",
-    );
+        // Look for B4hajb or oHUEyd patterns
+        const b4hajbResult = responseData.find(
+          (item: any) => item[0] === "wrb.fr" && item[1] === "B4hajb",
+        );
 
-    if (b4hajbResult && b4hajbResult[2]) {
-      try {
-        const inner = JSON.parse(b4hajbResult[2]);
-        // Looking for "LOGIN_CHALLENGE" or "TWO_STEP_VERIFICATION"
-        const status = inner?.[0]?.[2];
+        if (b4hajbResult && b4hajbResult[2]) {
+          try {
+            const inner = JSON.parse(b4hajbResult[2]);
+            // Looking for "LOGIN_CHALLENGE" or "TWO_STEP_VERIFICATION"
+            const status = inner?.[0]?.[2];
 
-        if (status === "LOGIN_CHALLENGE") {
-          // Check for key 1037 (Device Prompt number)
-          const challengePayload = inner?.[0]?.[29]; // Index 29 usually holds extra info
-          const data1037 = challengePayload?.["1037"];
+            if (status === "LOGIN_CHALLENGE") {
+              // Check for key 1037 (Device Prompt number)
+              const challengePayload = inner?.[0]?.[29]; // Index 29 usually holds extra info
+              const data1037 = challengePayload?.["1037"];
 
-          if (data1037 && data1037[4]) {
-            return {
-              type: "GOOGLE_PROMPT",
-              promptNumber: data1037[4], // e.g., 43
-              devices: data1037[5]?.[0] || [], // List of devices notified
-              message: "Check your phone for the verification number.",
-            };
+              if (data1037 && data1037[4]) {
+                return {
+                  type: "GOOGLE_PROMPT",
+                  promptNumber: data1037[4], // e.g., 43
+                  devices: data1037[5]?.[0] || [], // List of devices notified
+                  message: "Check your phone for the verification number.",
+                };
+              }
+            }
+          } catch (e) {
+            this.logger.error("Error parsing B4hajb challenge", e);
           }
         }
-      } catch (e) {
-        this.logger.error("Error parsing B4hajb challenge", e);
+
+        // Look for reCAPTCHA markers: "recaptcha" or specific error codes
+        const responseStr = JSON.stringify(responseData).toLowerCase();
+        if (responseStr.includes("recaptcha") || responseStr.includes("robot")) {
+          return {
+            type: "RECAPTCHA",
+            message: "Google requires you to solve a CAPTCHA. Please solve it in the GPay app or try again.",
+          };
+        }
+
+        return null;
       }
-    }
-
-    // Look for reCAPTCHA markers: "recaptcha" or specific error codes
-    const responseStr = JSON.stringify(responseData).toLowerCase();
-    if (responseStr.includes("recaptcha") || responseStr.includes("robot")) {
-      return {
-        type: "RECAPTCHA",
-        message: "Google requires you to solve a CAPTCHA. Please solve it in the GPay app or try again.",
-      };
-    }
-
-    return null;
-  }
 
   /**
    * Update GPay UPI ID - finds the GPay connection by org + email and updates accountIdentifier.
    */
   async updateGpayUpi(data: {
-    organizationId: string;
-    upiId: string;
-    email?: string;
-  }) {
-    try {
-      this.logger.log(
-        `📝 Updating GPay UPI for org: ${data.organizationId}, upiId: ${data.upiId}`,
-      );
+        organizationId: string;
+        upiId: string;
+        email?: string;
+      }) {
+        try {
+          this.logger.log(
+            `📝 Updating GPay UPI for org: ${data.organizationId}, upiId: ${data.upiId}`,
+          );
 
-      if (!data.organizationId || !data.upiId?.trim()) {
-        throw new BadRequestException(
-          "Organization ID and UPI ID are required",
-        );
+          if (!data.organizationId || !data.upiId?.trim()) {
+            throw new BadRequestException(
+              "Organization ID and UPI ID are required",
+            );
+          }
+
+          const upiRegex =
+            /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-_]{2,64}$/;
+          if (!upiRegex.test(data.upiId.trim())) {
+            throw new BadRequestException(
+              "Invalid UPI ID format (e.g., yourname@gpay)",
+            );
+          }
+
+          // Find GPay row: accountIdentifier may be Gmail (first connect) or VPA (after update / reconnect).
+          // Do not require accountIdentifier === email or the lookup fails after we persist UPI as identifier.
+          const emailNorm = data.email?.trim().toLowerCase();
+          const upiNorm = data.upiId.trim().toLowerCase();
+
+          const candidates = await this.prisma.merchantProvider.findMany({
+            where: {
+              merchant: {
+                organizationId: data.organizationId,
+                deletedAt: null,
+              },
+              providerType: ProviderType.GPAY,
+            },
+            orderBy: { updatedAt: "desc" },
+          });
+
+          let provider = null as (typeof candidates)[0] | null;
+          if (emailNorm) {
+            provider =
+              candidates.find((p) => {
+                const acct = (p.accountIdentifier || "").toLowerCase();
+                const cred = (p.credentials as { email?: string } | null)?.email;
+                const credStr =
+                  typeof cred === "string" ? cred.toLowerCase() : "";
+                return acct === emailNorm || credStr === emailNorm;
+              }) ?? null;
+          }
+          if (!provider) {
+            provider =
+              candidates.find(
+                (p) => (p.accountIdentifier || "").toLowerCase() === upiNorm,
+              ) ?? null;
+          }
+          if (!provider && candidates.length === 1) {
+            provider = candidates[0];
+          }
+
+          if (!provider) {
+            throw new BadRequestException(
+              "No GPay connection found for this organization. Please connect GPay first.",
+            );
+          }
+
+          await this.prisma.merchantProvider.update({
+            where: { id: provider.id },
+            data: { accountIdentifier: data.upiId.trim() },
+          });
+
+          const merchantWithConfig = await this.prisma.merchant.findUnique({
+            where: { id: provider.merchantId },
+            include: { config: true },
+          });
+          const requiresConfiguration = !merchantWithConfig?.verified || !merchantWithConfig?.config;
+
+          this.logger.log(`✅ GPay UPI updated: ${provider.id} -> ${data.upiId}`);
+          return {
+            success: true,
+            merchantId: provider.merchantId,
+            requiresConfiguration,
+            message: "GPay UPI ID saved successfully",
+          };
+        } catch (error: any) {
+          this.logger.error(`❌ Failed to update GPay UPI:`, error);
+          if (error instanceof BadRequestException) {
+            throw error;
+          }
+          throw new BadRequestException(
+            error?.message || "Failed to update GPay UPI",
+          );
+        }
       }
-
-      const upiRegex =
-        /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z][a-zA-Z0-9.\-_]{2,64}$/;
-      if (!upiRegex.test(data.upiId.trim())) {
-        throw new BadRequestException(
-          "Invalid UPI ID format (e.g., yourname@gpay)",
-        );
-      }
-
-      // Find GPay row: accountIdentifier may be Gmail (first connect) or VPA (after update / reconnect).
-      // Do not require accountIdentifier === email or the lookup fails after we persist UPI as identifier.
-      const emailNorm = data.email?.trim().toLowerCase();
-      const upiNorm = data.upiId.trim().toLowerCase();
-
-      const candidates = await this.prisma.merchantProvider.findMany({
-        where: {
-          merchant: {
-            organizationId: data.organizationId,
-            deletedAt: null,
-          },
-          providerType: ProviderType.GPAY,
-        },
-        orderBy: { updatedAt: "desc" },
-      });
-
-      let provider = null as (typeof candidates)[0] | null;
-      if (emailNorm) {
-        provider =
-          candidates.find((p) => {
-            const acct = (p.accountIdentifier || "").toLowerCase();
-            const cred = (p.credentials as { email?: string } | null)?.email;
-            const credStr =
-              typeof cred === "string" ? cred.toLowerCase() : "";
-            return acct === emailNorm || credStr === emailNorm;
-          }) ?? null;
-      }
-      if (!provider) {
-        provider =
-          candidates.find(
-            (p) => (p.accountIdentifier || "").toLowerCase() === upiNorm,
-          ) ?? null;
-      }
-      if (!provider && candidates.length === 1) {
-        provider = candidates[0];
-      }
-
-      if (!provider) {
-        throw new BadRequestException(
-          "No GPay connection found for this organization. Please connect GPay first.",
-        );
-      }
-
-      await this.prisma.merchantProvider.update({
-        where: { id: provider.id },
-        data: { accountIdentifier: data.upiId.trim() },
-      });
-
-      const merchantWithConfig = await this.prisma.merchant.findUnique({
-        where: { id: provider.merchantId },
-        include: { config: true },
-      });
-      const requiresConfiguration = !merchantWithConfig?.verified || !merchantWithConfig?.config;
-
-      this.logger.log(`✅ GPay UPI updated: ${provider.id} -> ${data.upiId}`);
-      return {
-        success: true,
-        merchantId: provider.merchantId,
-        requiresConfiguration,
-        message: "GPay UPI ID saved successfully",
-      };
-    } catch (error: any) {
-      this.logger.error(`❌ Failed to update GPay UPI:`, error);
-      if (error instanceof BadRequestException) {
-        throw error;
-      }
-      throw new BadRequestException(
-        error?.message || "Failed to update GPay UPI",
-      );
-    }
-  }
 
   private async findOrCreateMerchant(
-    merchantId: string,
-    organizationId: string,
-    name: string,
-    isSuperAdmin: boolean = false,
-  ) {
-    // When onboarding with temp- merchantId: always create NEW merchant (don't attach to existing PhonePe/etc)
-    const isNewOnboarding = merchantId.startsWith("temp-") || !merchantId;
-    if (isNewOnboarding) {
-      const id = `gpay_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-      return this.prisma.merchant.create({
-        data: {
-          id,
-          organizationId,
-          name,
-          isActive: true,
-          isPlatform: isSuperAdmin,
-        },
-      });
-    }
+        merchantId: string,
+        organizationId: string,
+        name: string,
+        isSuperAdmin: boolean = false,
+      ) {
+        // When onboarding with temp- merchantId: always create NEW merchant (don't attach to existing PhonePe/etc)
+        const isNewOnboarding = merchantId.startsWith("temp-") || !merchantId;
+        if (isNewOnboarding) {
+          const id = `gpay_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+          return this.prisma.merchant.create({
+            data: {
+              id,
+              organizationId,
+              name,
+              isActive: true,
+              isPlatform: isSuperAdmin,
+            },
+          });
+        }
 
-    // When connecting to existing merchant (real merchantId): find or create that one
-    // Look up regardless of deletedAt to allow restoration
-    let merchant = await this.prisma.merchant.findFirst({
-      where: { id: merchantId, organizationId } as any,
-    });
+        // When connecting to existing merchant (real merchantId): find or create that one
+        // Look up regardless of deletedAt to allow restoration
+        let merchant = await this.prisma.merchant.findFirst({
+          where: { id: merchantId, organizationId } as any,
+        });
 
-    if (merchant && merchant.deletedAt) {
-      this.logger.log(`♻️ Restoring soft-deleted merchant: ${merchant.id}`);
-      merchant = await this.prisma.merchant.update({
-        where: { id: merchant.id },
-        data: { deletedAt: null, isActive: true } as any,
-      });
-    }
-    if (!merchant) {
-      merchant = await this.prisma.merchant.create({
-        data: {
-          id: merchantId,
-          organizationId,
-          name,
-          isActive: true,
-          isPlatform: isSuperAdmin,
-        },
-      });
-    }
-    return merchant;
-  }
+        if (merchant && merchant.deletedAt) {
+          this.logger.log(`♻️ Restoring soft-deleted merchant: ${merchant.id}`);
+          merchant = await this.prisma.merchant.update({
+            where: { id: merchant.id },
+            data: { deletedAt: null, isActive: true } as any,
+          });
+        }
+        if (!merchant) {
+          merchant = await this.prisma.merchant.create({
+            data: {
+              id: merchantId,
+              organizationId,
+              name,
+              isActive: true,
+              isPlatform: isSuperAdmin,
+            },
+          });
+        }
+        return merchant;
+      }
 
   // ─── Persistent Browser Session Management ───────────────────────────────
 
   private async optimizePage(page: any) {
-    await page.route("**/*", (route: any) => {
-      const type = route.request().resourceType();
-      if (['image', 'media', 'font', 'stylesheet'].includes(type)) {
-        route.abort();
-        return;
-      }
+        await page.route("**/*", (route: any) => {
+          const type = route.request().resourceType();
+          if (['image', 'media', 'font', 'stylesheet'].includes(type)) {
+            route.abort();
+            return;
+          }
 
-      const url = route.request().url();
-      if (
-        url.includes("play.google.com/log") ||
-        url.includes("google.com/pagead/") ||
-        url.includes("googleadservices.com") ||
-        url.includes("doubleclick.net") ||
-        url.includes("google-analytics.com") ||
-        url.includes("googletagmanager.com")
-      ) {
-        route.abort();
-      } else {
-        route.continue();
+          const url = route.request().url();
+          if (
+            url.includes("play.google.com/log") ||
+            url.includes("google.com/pagead/") ||
+            url.includes("googleadservices.com") ||
+            url.includes("doubleclick.net") ||
+            url.includes("google-analytics.com") ||
+            url.includes("googletagmanager.com")
+          ) {
+            route.abort();
+          } else {
+            route.continue();
+          }
+        });
       }
-    });
-  }
 
   /** Merge latest Playwright storage into credentials.sessionState (DB). */
   private async persistGpaySessionStateToDb(
-    providerId: string,
-    context: any,
-  ): Promise<boolean> {
-    if (!context || typeof context.storageState !== "function") {
-      return false;
-    }
-    const state = await context.storageState();
-    const provider = await this.prisma.merchantProvider.findUnique({
-      where: { id: providerId },
-    });
-    if (!provider) return false;
-    const credentials = (provider.credentials as any) || {};
-    await this.prisma.merchantProvider.update({
-      where: { id: providerId },
-      data: {
-        credentials: {
-          ...credentials,
-          sessionState: state,
-        },
-      },
-    });
-    return true;
-  }
+        providerId: string,
+        context: any,
+      ): Promise<boolean> {
+        if (!context || typeof context.storageState !== "function") {
+          return false;
+        }
+        const state = await context.storageState();
+        const provider = await this.prisma.merchantProvider.findUnique({
+          where: { id: providerId },
+        });
+        if (!provider) return false;
+        const credentials = (provider.credentials as any) || {};
+        await this.prisma.merchantProvider.update({
+          where: { id: providerId },
+          data: {
+            credentials: {
+              ...credentials,
+              sessionState: state,
+            },
+          },
+        });
+        return true;
+      }
 
   private async storeActiveSession(
-    providerId: string,
-    session: { browser: any; context: any; page: any; businessId: string; email: string; organizationId: string }
-  ) {
-    // Clean up any existing session for this provider
-    const existing = this.activeSessions.get(providerId);
-    if (existing) {
-      if (existing.browser !== session.browser) {
-        existing.browser.close().catch(() => { });
-      }
-    }
-
-    this.activeSessions.set(providerId, {
-      ...session,
-      connectedAt: new Date(),
-      lastAccessedAt: new Date(),
-    });
-
-    // Capture Playwright storage state (cookies + localStorage) for persistence
-    try {
-      const state = await session.context.storageState();
-
-      // Persist to database so it survives server restarts
-      const provider = await this.prisma.merchantProvider.findUnique({ where: { id: providerId } });
-      const credentials = (provider?.credentials as any) || {};
-
-      await this.prisma.merchantProvider.update({
-        where: { id: providerId },
-        data: {
-          status: 'ACTIVE',
-          credentials: {
-            ...credentials,
-            sessionState: state,
-            businessId: session.businessId,
-            email: session.email,
+        providerId: string,
+        session: { browser: any; context: any; page: any; businessId: string; email: string; organizationId: string }
+      ) {
+        // Clean up any existing session for this provider
+        const existing = this.activeSessions.get(providerId);
+        if (existing) {
+          if (existing.browser !== session.browser) {
+            existing.browser.close().catch(() => { });
           }
-        },
-      });
-      this.logger.log(`💾 Persisted GPay session state to DB for provider ${providerId}`);
-    } catch (e) {
-      this.logger.warn(`⚠️ Failed to persist GPay session state to DB: ${e?.message}`);
-    }
+        }
 
-    this.logger.log(`🟢 Persistent GPay session stored for provider ${providerId} (${session.email}) — browser kept alive`);
-    this.logger.log(`📊 Active GPay sessions: ${this.activeSessions.size}`);
+        this.activeSessions.set(providerId, {
+          ...session,
+          connectedAt: new Date(),
+          lastAccessedAt: new Date(),
+        });
 
-    // Start real-time listener (navigates once and stays there)
-    this.setupRealtimeListener(providerId, session.businessId).catch(err => {
-      this.logger.error(`❌ Failed to setup real-time listener for ${providerId}: ${err.message}`);
-    });
-  }
+        // Capture Playwright storage state (cookies + localStorage) for persistence
+        try {
+          const state = await session.context.storageState();
+
+          // Persist to database so it survives server restarts
+          const provider = await this.prisma.merchantProvider.findUnique({ where: { id: providerId } });
+          const credentials = (provider?.credentials as any) || {};
+
+          await this.prisma.merchantProvider.update({
+            where: { id: providerId },
+            data: {
+              status: 'ACTIVE',
+              credentials: {
+                ...credentials,
+                sessionState: state,
+                businessId: session.businessId,
+                email: session.email,
+              }
+            },
+          });
+          this.logger.log(`💾 Persisted GPay session state to DB for provider ${providerId}`);
+        } catch (e) {
+          this.logger.warn(`⚠️ Failed to persist GPay session state to DB: ${e?.message}`);
+        }
+
+        this.logger.log(`🟢 Persistent GPay session stored for provider ${providerId} (${session.email}) — browser kept alive`);
+        this.logger.log(`📊 Active GPay sessions: ${this.activeSessions.size}`);
+
+        // Start real-time listener (navigates once and stays there)
+        this.setupRealtimeListener(providerId, session.businessId).catch(err => {
+          this.logger.error(`❌ Failed to setup real-time listener for ${providerId}: ${err.message}`);
+        });
+      }
 
   /**
    * Attempt to restore a persistent browser session from stored state in the database.
    * Returns true if restored successfully, false otherwise.
    */
   private async restoreSession(providerId: string): Promise<boolean> {
-    if (this.restoringProviders.has(providerId)) return false;
-    this.restoringProviders.add(providerId);
-
-    try {
-      this.logger.log(`🔄 Attempting to restore GPay session for provider ${providerId}...`);
-
-      const provider = await this.prisma.merchantProvider.findUnique({
-        where: { id: providerId },
-        include: { merchant: true }
-      });
-
-      if (!provider || !provider.isActive) {
-        this.logger.warn(`Cannot restore session: Provider ${providerId} not found or inactive`);
-        return false;
-      }
-
-      const credentials = provider.credentials as any;
-      const sessionState = credentials?.sessionState;
-      const businessId = credentials?.businessId;
-      const email = credentials?.email;
-
-      if (!businessId || !email) {
-        this.logger.warn(`No businessId/email found for provider ${providerId}`);
-        return false;
-      }
-
-      const browserType = process.env.GPAY_BROWSER || "chromium";
-      const launchOpts = this.getLaunchOptions(email);
-
-      // Prefer restoring via stable persistent profile on disk.
-      // This typically survives restarts better than replaying storageState.
-      if (browserType === "chromium") {
-        const userDataDir = this.getStableUserDataDir(email);
-        let context: any = null;
-        let ownedByActiveSessions = false;
-        
-        let launchAttempts = 0;
-        while (launchAttempts < 3) {
-          try {
-            this.clearSingletonLock(userDataDir);
-            context = await chromium.launchPersistentContext(userDataDir, {
-              ...launchOpts,
-              viewport: { width: 1920, height: 1080 },
-              locale: "en-IN",
-              timezoneId: "Asia/Kolkata",
-            });
-            break;
-          } catch (e: any) {
-            const msg = String(e?.message || "").toLowerCase();
-            if (msg.includes("singletonlock") || msg.includes("processsingleton") || msg.includes("target page, context or browser has been closed")) {
-              launchAttempts++;
-              if (launchAttempts >= 3) {
-                this.logger.warn(`⚠️ GPay profile persistently locked for restore ${email}`);
-                throw e;
-              }
-              this.logger.warn(`⚠️ GPay profile locked for restore ${email}. Retrying in 1s...`);
-              await new Promise(r => setTimeout(r, 1000));
-            } else {
-              throw e;
-            }
-          }
-        }
+        if (this.restoringProviders.has(providerId)) return false;
+        this.restoringProviders.add(providerId);
 
         try {
-          const browser = context.browser();
-          const page = await context.newPage();
-          await this.optimizePage(page);
+          this.logger.log(`🔄 Attempting to restore GPay session for provider ${providerId}...`);
 
-          const transactionsUrl = `https://pay.google.com/g4b/transactions/${businessId}`;
-          this.logger.log(`📍 Verifying restored session at: ${transactionsUrl}`);
-          await page.goto(transactionsUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-          await new Promise((r) => setTimeout(r, 2000));
+          const provider = await this.prisma.merchantProvider.findUnique({
+            where: { id: providerId },
+            include: { merchant: true }
+          });
 
-          const currentUrl = page.url();
-          if (!currentUrl.includes("pay.google.com/g4b")) {
-            this.logger.warn(
-              `⚠️ GPay restoration for ${providerId} redirected to login (${currentUrl}) — session likely requires manual re-auth`,
-            );
-            await browser?.close?.().catch(() => { });
-          } else {
-            this.logger.log(
-              `✅ Session restored successfully for provider ${providerId} via persistent profile. Setting status ACTIVE.`,
-            );
-            await this.prisma.merchantProvider
-              .update({ where: { id: providerId }, data: { status: "ACTIVE" } })
-              .catch(() => { });
+          if (!provider || !provider.isActive) {
+            this.logger.warn(`Cannot restore session: Provider ${providerId} not found or inactive`);
+            return false;
+          }
 
+          const credentials = provider.credentials as any;
+          const sessionState = credentials?.sessionState;
+          const businessId = credentials?.businessId;
+          const email = credentials?.email;
+
+          if (!businessId || !email) {
+            this.logger.warn(`No businessId/email found for provider ${providerId}`);
+            return false;
+          }
+
+          const browserType = process.env.GPAY_BROWSER || "chromium";
+          const launchOpts = this.getLaunchOptions(email);
+
+          // Prefer restoring via stable persistent profile on disk.
+          // This typically survives restarts better than replaying storageState.
+          if (browserType === "chromium") {
+            const userDataDir = this.getStableUserDataDir(email);
+            let context: any = null;
+            let ownedByActiveSessions = false;
+
+            let launchAttempts = 0;
+            while (launchAttempts < 3) {
+              try {
+                this.clearSingletonLock(userDataDir);
+                context = await chromium.launchPersistentContext(userDataDir, {
+                  ...launchOpts,
+                  viewport: { width: 1920, height: 1080 },
+                  locale: "en-IN",
+                  timezoneId: "Asia/Kolkata",
+                });
+                break;
+              } catch (e: any) {
+                const msg = String(e?.message || "").toLowerCase();
+                if (msg.includes("singletonlock") || msg.includes("processsingleton") || msg.includes("target page, context or browser has been closed")) {
+                  launchAttempts++;
+                  if (launchAttempts >= 3) {
+                    this.logger.warn(`⚠️ GPay profile persistently locked for restore ${email}`);
+                    throw e;
+                  }
+                  this.logger.warn(`⚠️ GPay profile locked for restore ${email}. Retrying in 1s...`);
+                  await new Promise(r => setTimeout(r, 1000));
+                } else {
+                  throw e;
+                }
+              }
+            }
+
+            try {
+              const browser = context.browser();
+              const page = await context.newPage();
+              await this.optimizePage(page);
+
+              const transactionsUrl = `https://pay.google.com/g4b/transactions/${businessId}`;
+              this.logger.log(`📍 Verifying restored session at: ${transactionsUrl}`);
+              await page.goto(transactionsUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+              await new Promise((r) => setTimeout(r, 2000));
+
+              const currentUrl = page.url();
+              if (!currentUrl.includes("pay.google.com/g4b")) {
+                this.logger.warn(
+                  `⚠️ GPay restoration for ${providerId} redirected to login (${currentUrl}) — session likely requires manual re-auth`,
+                );
+                await browser?.close?.().catch(() => { });
+              } else {
+                this.logger.log(
+                  `✅ Session restored successfully for provider ${providerId} via persistent profile. Setting status ACTIVE.`,
+                );
+                await this.prisma.merchantProvider
+                  .update({ where: { id: providerId }, data: { status: "ACTIVE" } })
+                  .catch(() => { });
+
+                this.activeSessions.set(providerId, {
+                  browser,
+                  context,
+                  page,
+                  businessId,
+                  email,
+                  organizationId: provider.merchant.organizationId,
+                  connectedAt: new Date(),
+                  lastAccessedAt: new Date(),
+                });
+                ownedByActiveSessions = true;
+
+                await this.persistGpaySessionStateToDb(providerId, context).catch((e: any) =>
+                  this.logger.warn(
+                    `Could not persist GPay sessionState after profile restore ${providerId}: ${e?.message}`,
+                  ),
+                );
+
+                this.setupRealtimeListener(providerId, businessId).catch(() => { });
+                return true;
+              }
+            } catch (e: any) {
+              this.logger.warn(
+                `⚠️ Persistent-profile restore failed for ${providerId}: ${e?.message || String(e)}`,
+              );
+            } finally {
+              if (!ownedByActiveSessions && context) {
+                const startTime = (context as any)._startTime || Date.now();
+                try {
+                  await context.close();
+                  this.logger.log(`Browser Closed | reason: persistent restore finally | lifetime: ${Date.now() - startTime}ms`);
+                } catch (_) { }
+              }
+            }
+          }
+
+          // Fallback: restore using stored storageState (works sometimes, less reliable)
+          if (!sessionState) {
+            this.logger.warn(`No sessionState found for provider ${providerId} (cannot fallback restore)`);
+            return false;
+          }
+
+          let browser: any = null;
+          let context: any = null;
+          let ownedByActiveSessions = false;
+          try {
+            const launcher = browserType === "chromium" ? chromium : firefox;
+            browser = await launcher.launch(launchOpts);
+
+            context = await browser.newContext({
+              storageState: sessionState,
+              viewport: { width: 1920, height: 1080 },
+              locale: "en-US",
+              userAgent:
+                browserType === "firefox"
+                  ? undefined
+                  : "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            });
+
+            const page = await context.newPage();
+            await this.optimizePage(page);
+
+            // Verify if session is still valid by visiting the transactions page
+            const transactionsUrl = `https://pay.google.com/g4b/transactions/${businessId}`;
+            this.logger.log(`📍 Verifying restored session at: ${transactionsUrl}`);
+
+            await page.goto(transactionsUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await new Promise(r => setTimeout(r, 2000)); // Allow SPA to settle
+
+            const currentUrl = page.url();
+            if (!currentUrl.includes('pay.google.com/g4b')) {
+              this.logger.warn(`⚠️ GPay restoration for ${providerId} redirected to login (${currentUrl}) — session likely requires manual re-auth or headed browser`);
+              await browser.close().catch(() => { });
+              return false;
+            }
+
+            this.logger.log(`✅ Session restored successfully for provider ${providerId}! Explicitly setting status to ACTIVE.`);
+
+            // Ensure DB status is ACTIVE upon successful restoration
+            await this.prisma.merchantProvider.update({
+              where: { id: providerId },
+              data: { status: 'ACTIVE' }
+            }).catch(() => { });
+
+            // Store in memory and setup listener
             this.activeSessions.set(providerId, {
               browser,
               context,
@@ -2508,711 +2620,643 @@ export class GpayService implements OnModuleDestroy {
               email,
               organizationId: provider.merchant.organizationId,
               connectedAt: new Date(),
-              lastAccessedAt: new Date(),
+              lastAccessedAt: new Date()
             });
             ownedByActiveSessions = true;
 
             await this.persistGpaySessionStateToDb(providerId, context).catch((e: any) =>
               this.logger.warn(
-                `Could not persist GPay sessionState after profile restore ${providerId}: ${e?.message}`,
+                `Could not persist GPay sessionState after storageState restore ${providerId}: ${e?.message}`,
               ),
             );
 
             this.setupRealtimeListener(providerId, businessId).catch(() => { });
             return true;
+          } catch (e: any) {
+            this.logger.warn(`⚠️ Fallback restore failed for ${providerId}: ${e?.message || String(e)}`);
+            return false;
+          } finally {
+            if (!ownedByActiveSessions && browser) {
+              const startTime = (browser as any)._startTime || Date.now();
+              try {
+                await browser.close();
+                this.logger.log(`Browser Closed | reason: fallback restore finally | lifetime: ${Date.now() - startTime}ms`);
+              } catch (_) { }
+            }
           }
-        } catch (e: any) {
-          this.logger.warn(
-            `⚠️ Persistent-profile restore failed for ${providerId}: ${e?.message || String(e)}`,
-          );
+
+        } catch (error) {
+          this.logger.error(`❌ Failed to restore GPay session for ${providerId}:`, error);
+          return false;
         } finally {
-          if (!ownedByActiveSessions && context) {
-            const startTime = (context as any)._startTime || Date.now();
-            try {
-              await context.close();
-              this.logger.log(`Browser Closed | reason: persistent restore finally | lifetime: ${Date.now() - startTime}ms`);
-            } catch (_) {}
-          }
+          this.restoringProviders.delete(providerId);
         }
       }
-
-      // Fallback: restore using stored storageState (works sometimes, less reliable)
-      if (!sessionState) {
-        this.logger.warn(`No sessionState found for provider ${providerId} (cannot fallback restore)`);
-        return false;
-      }
-
-      let browser: any = null;
-      let context: any = null;
-      let ownedByActiveSessions = false;
-      try {
-        const launcher = browserType === "chromium" ? chromium : firefox;
-        browser = await launcher.launch(launchOpts);
-
-        context = await browser.newContext({
-          storageState: sessionState,
-          viewport: { width: 1920, height: 1080 },
-          locale: "en-US",
-          userAgent:
-            browserType === "firefox"
-              ? undefined
-              : "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        });
-
-        const page = await context.newPage();
-      await this.optimizePage(page);
-
-      // Verify if session is still valid by visiting the transactions page
-      const transactionsUrl = `https://pay.google.com/g4b/transactions/${businessId}`;
-      this.logger.log(`📍 Verifying restored session at: ${transactionsUrl}`);
-
-      await page.goto(transactionsUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await new Promise(r => setTimeout(r, 2000)); // Allow SPA to settle
-
-      const currentUrl = page.url();
-      if (!currentUrl.includes('pay.google.com/g4b')) {
-        this.logger.warn(`⚠️ GPay restoration for ${providerId} redirected to login (${currentUrl}) — session likely requires manual re-auth or headed browser`);
-        await browser.close().catch(() => { });
-        return false;
-      }
-
-      this.logger.log(`✅ Session restored successfully for provider ${providerId}! Explicitly setting status to ACTIVE.`);
-
-      // Ensure DB status is ACTIVE upon successful restoration
-      await this.prisma.merchantProvider.update({
-        where: { id: providerId },
-        data: { status: 'ACTIVE' }
-      }).catch(() => { });
-
-      // Store in memory and setup listener
-      this.activeSessions.set(providerId, {
-        browser,
-        context,
-        page,
-        businessId,
-        email,
-        organizationId: provider.merchant.organizationId,
-        connectedAt: new Date(),
-        lastAccessedAt: new Date()
-      });
-      ownedByActiveSessions = true;
-
-      await this.persistGpaySessionStateToDb(providerId, context).catch((e: any) =>
-        this.logger.warn(
-          `Could not persist GPay sessionState after storageState restore ${providerId}: ${e?.message}`,
-        ),
-      );
-
-      this.setupRealtimeListener(providerId, businessId).catch(() => { });
-      return true;
-    } catch (e: any) {
-      this.logger.warn(`⚠️ Fallback restore failed for ${providerId}: ${e?.message || String(e)}`);
-      return false;
-    } finally {
-      if (!ownedByActiveSessions && browser) {
-        const startTime = (browser as any)._startTime || Date.now();
-        try {
-          await browser.close();
-          this.logger.log(`Browser Closed | reason: fallback restore finally | lifetime: ${Date.now() - startTime}ms`);
-        } catch (_) {}
-      }
-    }
-
-    } catch (error) {
-      this.logger.error(`❌ Failed to restore GPay session for ${providerId}:`, error);
-      return false;
-    } finally {
-      this.restoringProviders.delete(providerId);
-    }
-  }
 
   /**
    * Get the live browser page for a provider (for making authenticated API calls).
    * Returns null if no active session exists.
    */
   getActiveSession(providerId: string) {
-    return this.activeSessions.get(providerId) || null;
-  }
+        return this.activeSessions.get(providerId) || null;
+      }
 
   /**
    * Check if a provider has an active browser session.
    */
   hasActiveSession(providerId: string): boolean {
-    return this.activeSessions.has(providerId);
-  }
+        return this.activeSessions.has(providerId);
+      }
 
   /**
    * Clean up a specific provider's browser session.
    */
   async cleanupSession(providerId: string) {
-    const session = this.activeSessions.get(providerId);
-    if (session) {
-      this.logger.log(`🔴 Closing persistent GPay session for provider ${providerId}`);
-      await session.browser.close().catch(() => { });
-      this.activeSessions.delete(providerId);
-    }
-    this.realtimeListenerProviders.delete(providerId);
-  }
+        const session = this.activeSessions.get(providerId);
+        if (session) {
+          this.logger.log(`🔴 Closing persistent GPay session for provider ${providerId}`);
+          await session.browser.close().catch(() => { });
+          this.activeSessions.delete(providerId);
+        }
+        this.realtimeListenerProviders.delete(providerId);
+      }
 
   /**
    * Clean up ALL active browser sessions (e.g., on server shutdown).
    */
   async cleanupAllSessions() {
-    this.logger.log(`🔴 Cleaning up ${this.activeSessions.size} active GPay sessions...`);
-    for (const [id, session] of this.activeSessions) {
-      await session.browser.close().catch(() => { });
-      this.activeSessions.delete(id);
-    }
-    this.realtimeListenerProviders.clear();
-  }
+        this.logger.log(`🔴 Cleaning up ${this.activeSessions.size} active GPay sessions...`);
+        for (const [id, session] of this.activeSessions) {
+          await session.browser.close().catch(() => { });
+          this.activeSessions.delete(id);
+        }
+        this.realtimeListenerProviders.clear();
+      }
 
   // ─── Real-time Listener Logic ───────────────────────────────────────────
 
   private async setupRealtimeListener(providerId: string, businessId: string) {
-    const session = this.activeSessions.get(providerId);
-    if (!session) return;
+        const session = this.activeSessions.get(providerId);
+        if (!session) return;
 
-    if (this.realtimeListenerProviders.has(providerId)) return;
-    this.realtimeListenerProviders.add(providerId);
+        if (this.realtimeListenerProviders.has(providerId)) return;
+        this.realtimeListenerProviders.add(providerId);
 
-    this.recentGPayPayments.set(providerId, []);
+        this.recentGPayPayments.set(providerId, []);
 
-    const transactionsUrl = `https://pay.google.com/g4b/transactions/${businessId}`;
+        const transactionsUrl = `https://pay.google.com/g4b/transactions/${businessId}`;
 
-    try {
-      this.logger.log(`📡 Setting up real-time GPay listener for provider ${providerId}...`);
-
-      // Monitor navigations (detect redirects to login/error pages)
-      session.page.on('framenavigated', (frame: any) => {
-        const url = frame.url();
-        if (frame === session.page.mainFrame() && !url.includes(businessId)) {
-          this.logger.warn(`⚠️ GPay browser navigated away from transactions: ${url} (Provider: ${providerId})`);
-          if (url.includes('accounts.google.com') || url.includes('ServiceLogin')) {
-            this.logger.error(`🚫 GPay SESSION EXPIRED (Redirected to login) for provider ${providerId}`);
-          }
-        }
-      });
-
-      this.logger.log(`👂 Real-time GPay listener attached before navigation for provider ${providerId}`);
-
-      session.page.on('response', async (response: any) => {
         try {
-          const url = response.url();
-          if (!url.includes('batchexecute')) return;
+          this.logger.log(`📡 Setting up real-time GPay listener for provider ${providerId}...`);
 
-          const status = response.status();
-          if (status !== 200) {
-            this.logger.warn(`⚠️ GPay batchexecute non-200 response: ${status} for ${providerId}`);
-          }
+          // Monitor navigations (detect redirects to login/error pages)
+          session.page.on('framenavigated', (frame: any) => {
+            const url = frame.url();
+            if (frame === session.page.mainFrame() && !url.includes(businessId)) {
+              this.logger.warn(`⚠️ GPay browser navigated away from transactions: ${url} (Provider: ${providerId})`);
+              if (url.includes('accounts.google.com') || url.includes('ServiceLogin')) {
+                this.logger.error(`🚫 GPay SESSION EXPIRED (Redirected to login) for provider ${providerId}`);
+              }
+            }
+          });
 
-          const text = await response.text().catch(() => '');
-          if (!text) return;
+          this.logger.log(`👂 Real-time GPay listener attached before navigation for provider ${providerId}`);
 
-          const cleaned = text.replace(/^\)\]\}'\n/, '');
-          const lines = cleaned.split(/\r?\n/);
-
-          for (const line of lines) {
-            if (!line.trim().startsWith('[')) continue;
+          session.page.on('response', async (response: any) => {
             try {
-              const parsed = JSON.parse(line.trim());
-              for (const item of parsed) {
-                if (!Array.isArray(item) || !item[2]) continue;
-                const rpcId = item[1];
+              const url = response.url();
+              if (!url.includes('batchexecute')) return;
 
-                // RPtkab = full transaction list on page load
-                if (rpcId === 'RPtkab') {
-                  const innerData = JSON.parse(item[2]);
-                  const txnList = this.findRealTxnList(innerData);
-                  if (txnList?.length) {
-                    this.logger.log(`📋 RPtkab: ${txnList.length} transactions loaded for ${providerId}`);
-                    const buffer = this.recentGPayPayments.get(providerId) || [];
-                    // Merge — update existing entries (e.g. yuZqtb push without note) with RPtkab data (which has note)
-                    for (const txn of txnList) {
-                      const parsedTxn = this.parseTxnRecord(txn);
-                      const existingIdx = buffer.findIndex((t: any) => t.txnId === parsedTxn.txnId);
-                      if (existingIdx >= 0) {
-                        // UPDATE existing entry with RPtkab data (which has note, full customer info, etc.)
-                        buffer[existingIdx] = { ...buffer[existingIdx], ...parsedTxn };
-                      } else {
-                        buffer.push(parsedTxn);
+              const status = response.status();
+              if (status !== 200) {
+                this.logger.warn(`⚠️ GPay batchexecute non-200 response: ${status} for ${providerId}`);
+              }
+
+              const text = await response.text().catch(() => '');
+              if (!text) return;
+
+              const cleaned = text.replace(/^\)\]\}'\n/, '');
+              const lines = cleaned.split(/\r?\n/);
+
+              for (const line of lines) {
+                if (!line.trim().startsWith('[')) continue;
+                try {
+                  const parsed = JSON.parse(line.trim());
+                  for (const item of parsed) {
+                    if (!Array.isArray(item) || !item[2]) continue;
+                    const rpcId = item[1];
+
+                    // RPtkab = full transaction list on page load
+                    if (rpcId === 'RPtkab') {
+                      const innerData = JSON.parse(item[2]);
+                      const txnList = this.findRealTxnList(innerData);
+                      if (txnList?.length) {
+                        this.logger.log(`📋 RPtkab: ${txnList.length} transactions loaded for ${providerId}`);
+                        const buffer = this.recentGPayPayments.get(providerId) || [];
+                        // Merge — update existing entries (e.g. yuZqtb push without note) with RPtkab data (which has note)
+                        for (const txn of txnList) {
+                          const parsedTxn = this.parseTxnRecord(txn);
+                          const existingIdx = buffer.findIndex((t: any) => t.txnId === parsedTxn.txnId);
+                          if (existingIdx >= 0) {
+                            // UPDATE existing entry with RPtkab data (which has note, full customer info, etc.)
+                            buffer[existingIdx] = { ...buffer[existingIdx], ...parsedTxn };
+                          } else {
+                            buffer.push(parsedTxn);
+                          }
+                        }
+                        this.recentGPayPayments.set(providerId, buffer);
+                        this.lastRPTkabLoadAt.set(providerId, Date.now());
                       }
                     }
-                    this.recentGPayPayments.set(providerId, buffer);
-                    this.lastRPTkabLoadAt.set(providerId, Date.now());
-                  }
-                }
 
-                // yuZqtb = real-time single payment push from Google
-                if (rpcId === 'yuZqtb') {
-                  const txn = JSON.parse(item[2]);
-                  this.logger.log(`[GPay Raw yuZqtb Debug] Raw payload: ${JSON.stringify(txn)}`);
-                  // yuZqtb flat: [txnId, utr, [ts, nanos], [currency, amount], customerName, vpa, ...]
-                  const txnId = String(txn[0]);
-                  const buffer = this.recentGPayPayments.get(providerId) || [];
-                  if (!buffer.find((t: any) => t.txnId === txnId)) {
-                    const amount = Array.isArray(txn[3]) ? Number(txn[3][1]) : 0;
-                    const utr = txn[1] ? String(txn[1]) : null;
+                    // yuZqtb = real-time single payment push from Google
+                    if (rpcId === 'yuZqtb') {
+                      const txn = JSON.parse(item[2]);
+                      this.logger.log(`[GPay Raw yuZqtb Debug] Raw payload: ${JSON.stringify(txn)}`);
+                      // yuZqtb flat: [txnId, utr, [ts, nanos], [currency, amount], customerName, vpa, ...]
+                      const txnId = String(txn[0]);
+                      const buffer = this.recentGPayPayments.get(providerId) || [];
+                      if (!buffer.find((t: any) => t.txnId === txnId)) {
+                        const amount = Array.isArray(txn[3]) ? Number(txn[3][1]) : 0;
+                        const utr = txn[1] ? String(txn[1]) : null;
 
-                    buffer.push({
-                      txnId,
-                      utr,
-                      timestamp: Array.isArray(txn[2])
-                        ? new Date(txn[2][0] * 1000 + Math.floor((txn[2][1] || 0) / 1_000_000))
-                        : new Date(),
-                      amount,
-                      customerName: typeof txn[4] === 'string' ? txn[4] : null,
-                      customerVpa: typeof txn[5] === 'string' ? txn[5] : null,
-                      status: 'COMPLETED',
-                      note: typeof txn[9] === 'string' ? txn[9] : null,
-                    });
-                    this.logger.log(`🔔 Real-time GPay payment: ₹${amount} UTR: ${utr} (Provider: ${providerId})`);
-                    const orderCron = this.getOrderStatusCronSafe();
-                    if (orderCron) {
-                      void orderCron
-                        .tryMatchPendingOrdersForGpayProvider(providerId)
-                        .catch((e: any) =>
-                          this.logger.warn(
-                            `GPay immediate order match failed: ${e?.message || e}`,
-                          ),
-                        );
+                        buffer.push({
+                          txnId,
+                          utr,
+                          timestamp: Array.isArray(txn[2])
+                            ? new Date(txn[2][0] * 1000 + Math.floor((txn[2][1] || 0) / 1_000_000))
+                            : new Date(),
+                          amount,
+                          customerName: typeof txn[4] === 'string' ? txn[4] : null,
+                          customerVpa: typeof txn[5] === 'string' ? txn[5] : null,
+                          status: 'COMPLETED',
+                          note: typeof txn[9] === 'string' ? txn[9] : null,
+                        });
+                        this.logger.log(`🔔 Real-time GPay payment: ₹${amount} UTR: ${utr} (Provider: ${providerId})`);
+                        const orderCron = this.getOrderStatusCronSafe();
+                        if (orderCron) {
+                          void orderCron
+                            .tryMatchPendingOrdersForGpayProvider(providerId)
+                            .catch((e: any) =>
+                              this.logger.warn(
+                                `GPay immediate order match failed: ${e?.message || e}`,
+                              ),
+                            );
+                        }
+                      }
+                      this.recentGPayPayments.set(providerId, buffer);
                     }
                   }
-                  this.recentGPayPayments.set(providerId, buffer);
-                }
+                } catch { }
               }
             } catch { }
-          }
-        } catch { }
-      });
+          });
 
-      await session.page
-        .goto(transactionsUrl, {
-          waitUntil: "domcontentloaded",
-          timeout: 90000, // Extended timeout for first load
-        })
-        .catch(async (e: any) => {
-          const msg = String(e?.message || "");
-          this.logger.warn(`Initial nav warning for ${providerId}: ${msg}`);
-          if (msg.includes("net::ERR_ABORTED")) {
-            await new Promise((r) => setTimeout(r, 1200));
-            await session.page
-              .goto(transactionsUrl, { waitUntil: "domcontentloaded", timeout: 90000 })
-              .catch((e2: any) =>
-                this.logger.warn(`Initial nav retry warning for ${providerId}: ${e2?.message}`),
-              );
-          }
-        });
-    } catch (err: any) {
-      this.logger.error(`❌ Global error in GPay listener for ${providerId}: ${err.message}`);
-      this.realtimeListenerProviders.delete(providerId);
-    }
-  }
+          await session.page
+            .goto(transactionsUrl, {
+              waitUntil: "domcontentloaded",
+              timeout: 90000, // Extended timeout for first load
+            })
+            .catch(async (e: any) => {
+              const msg = String(e?.message || "");
+              this.logger.warn(`Initial nav warning for ${providerId}: ${msg}`);
+              if (msg.includes("net::ERR_ABORTED")) {
+                await new Promise((r) => setTimeout(r, 1200));
+                await session.page
+                  .goto(transactionsUrl, { waitUntil: "domcontentloaded", timeout: 90000 })
+                  .catch((e2: any) =>
+                    this.logger.warn(`Initial nav retry warning for ${providerId}: ${e2?.message}`),
+                  );
+              }
+            });
+        } catch (err: any) {
+          this.logger.error(`❌ Global error in GPay listener for ${providerId}: ${err.message}`);
+          this.realtimeListenerProviders.delete(providerId);
+        }
+      }
 
   private async ensureActiveSession(providerId: string) {
-    let session = this.activeSessions.get(providerId) || null;
-    if (!session) return null;
+        let session = this.activeSessions.get(providerId) || null;
+        if (!session) return null;
 
-    try {
-      if (typeof session.page?.isClosed === "function" && session.page.isClosed()) {
-        this.logger.warn(
-          `⚠️ Stale GPay page detected (closed) for provider ${providerId}. Attempting restore...`,
-        );
-        await this.cleanupSession(providerId);
-        const restored = await this.restoreSession(providerId);
-        return restored ? (this.activeSessions.get(providerId) || null) : null;
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
-      session.page?.url?.();
-    } catch {
-      this.logger.warn(
-        `⚠️ Stale GPay session detected (url() failed) for provider ${providerId}. Attempting restore...`,
-      );
-      await this.cleanupSession(providerId);
-      const restored = await this.restoreSession(providerId);
-      return restored ? (this.activeSessions.get(providerId) || null) : null;
-    }
-
-    session.lastAccessedAt = new Date();
-    return session;
-  }
-
-  private parseTxnRecord(record: any) {
-    const r = Array.isArray(record[0]) && record[0].length > 3 ? record[0] : record;
-    
-    // Debug logging to inspect the actual array structure coming from Google Pay
-    console.log(`[GPay Raw RPtkab Debug] Record array: ${JSON.stringify(r)}`);
-    
-    return {
-      txnId: String(r[0]),
-      utr: r[1] ? String(r[1]) : null,
-      timestamp: Array.isArray(r[2])
-        ? new Date(r[2][0] * 1000 + Math.floor((r[2][1] || 0) / 1_000_000))
-        : new Date(),
-      amount: Array.isArray(r[3]) ? Number(r[3][1]) : 0,
-      customerName: Array.isArray(r[8]) ? r[8][0] : null,
-      customerVpa: Array.isArray(r[8]) ? r[8][1] : null,
-      status: (r[5] === 3 || r[5] === 4) ? 'COMPLETED' : 'PENDING',
-      note: typeof r[9] === 'string' ? r[9] : null,
-    };
-  }
-
-  private findRealTxnList(data: any, depth = 0): any[] | null {
-    if (depth > 6 || !data) return null;
-    if (Array.isArray(data) && data.length > 0 && Array.isArray(data[0]) &&
-      typeof data[0][0] === 'string' && data[0].length >= 5) return data;
-    if (Array.isArray(data) && data.length === 1 && Array.isArray(data[0]))
-      return this.findRealTxnList(data[0], depth + 1);
-    if (Array.isArray(data)) {
-      for (const el of data) {
-        const found = this.findRealTxnList(el, depth + 1);
-        if (found) return found;
-      }
-    }
-    return null;
-  }
-
-  private async autoHealInvalidTransactionsUrl(
-    providerId: string,
-    session: any,
-    fallbackBusinessId?: string,
-  ): Promise<boolean> {
-    try {
-      const page = session?.page;
-      if (!page || (typeof page.isClosed === "function" && page.isClosed())) {
-        return false;
-      }
-
-      const currentUrl = String(page.url?.() || "");
-      const isMissingBusinessIdTxnUrl =
-        /^https:\/\/pay\.google\.com\/g4b\/transactions\/?(?:[?#].*)?$/i.test(currentUrl);
-      if (!isMissingBusinessIdTxnUrl) return false;
-
-      let businessId = session?.businessId || fallbackBusinessId;
-      if (!businessId) {
-        // Try DB credentials first when caller couldn't provide fallback.
-        const provider = await this.prisma.merchantProvider
-          .findUnique({ where: { id: providerId }, select: { credentials: true } })
-          .catch(() => null);
-        const creds = (provider?.credentials as any) || {};
-        businessId = creds?.businessId || "";
-      }
-
-      if (!businessId) {
-        // Last-resort discovery: open transactions root and extract businessId from redirected URL.
         try {
-          await page.goto("https://pay.google.com/g4b/transactions", {
-            waitUntil: "domcontentloaded",
-            timeout: 15000,
-          });
-          const discoveredUrl = String(page.url?.() || "");
-          const match = discoveredUrl.match(/\/(?:activity|transactions)\/([^/?#]+)/i);
-          if (match?.[1]) {
-            businessId = match[1];
-            this.logger.log(
-              `🔎 [DIAGNOSTIC] GPay discovered missing businessId for ${providerId}: ${businessId}`,
+          if (typeof session.page?.isClosed === "function" && session.page.isClosed()) {
+            this.logger.warn(
+              `⚠️ Stale GPay page detected (closed) for provider ${providerId}. Attempting restore...`,
             );
+            await this.cleanupSession(providerId);
+            const restored = await this.restoreSession(providerId);
+            return restored ? (this.activeSessions.get(providerId) || null) : null;
           }
         } catch {
-          // Ignore discovery navigation failure and continue to warning below.
+          // ignore
         }
-      }
 
-      if (!businessId) {
-        this.logger.warn(
-          `⚠️ GPay URL heal skipped for ${providerId}: transactions URL missing businessId and no fallback id available`,
-        );
-        return false;
-      }
-
-      const healedUrl = `https://pay.google.com/g4b/transactions/${businessId}`;
-      this.logger.warn(
-        `🩹 [DIAGNOSTIC] GPay invalid transactions URL detected for ${providerId} (${currentUrl}). Healing to ${healedUrl}`,
-      );
-      await page.goto(healedUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 30000,
-      });
-
-      // Attach discovered businessId for current in-memory session and DB restores.
-      if (!session?.businessId || session.businessId !== businessId) {
-        session.businessId = businessId;
         try {
-          const provider = await this.prisma.merchantProvider.findUnique({
-            where: { id: providerId },
-            select: { credentials: true },
-          });
-          const credentials = (provider?.credentials as any) || {};
-          await this.prisma.merchantProvider.update({
-            where: { id: providerId },
-            data: {
-              credentials: {
-                ...credentials,
-                businessId,
-              },
-            },
-          });
-        } catch (e: any) {
+          session.page?.url?.();
+        } catch {
           this.logger.warn(
-            `⚠️ Could not persist discovered businessId for ${providerId}: ${e?.message || e}`,
+            `⚠️ Stale GPay session detected (url() failed) for provider ${providerId}. Attempting restore...`,
           );
+          await this.cleanupSession(providerId);
+          const restored = await this.restoreSession(providerId);
+          return restored ? (this.activeSessions.get(providerId) || null) : null;
         }
+
+        session.lastAccessedAt = new Date();
+        return session;
       }
 
-      return true;
-    } catch (err: any) {
-      this.logger.warn(
-        `⚠️ GPay URL heal failed for ${providerId}: ${err?.message || err}`,
-      );
-      return false;
-    }
-  }
+  private parseTxnRecord(record: any) {
+        const r = Array.isArray(record[0]) && record[0].length > 3 ? record[0] : record;
+
+        // Debug logging to inspect the actual array structure coming from Google Pay
+        console.log(`[GPay Raw RPtkab Debug] Record array: ${JSON.stringify(r)}`);
+
+        return {
+          txnId: String(r[0]),
+          utr: r[1] ? String(r[1]) : null,
+          timestamp: Array.isArray(r[2])
+            ? new Date(r[2][0] * 1000 + Math.floor((r[2][1] || 0) / 1_000_000))
+            : new Date(),
+          amount: Array.isArray(r[3]) ? Number(r[3][1]) : 0,
+          customerName: Array.isArray(r[8]) ? r[8][0] : null,
+          customerVpa: Array.isArray(r[8]) ? r[8][1] : null,
+          status: (r[5] === 3 || r[5] === 4) ? 'COMPLETED' : 'PENDING',
+          note: typeof r[9] === 'string' ? r[9] : null,
+        };
+      }
+
+  private findRealTxnList(data: any, depth = 0): any[] | null {
+        if (depth > 6 || !data) return null;
+        if (Array.isArray(data) && data.length > 0 && Array.isArray(data[0]) &&
+          typeof data[0][0] === 'string' && data[0].length >= 5) return data;
+        if (Array.isArray(data) && data.length === 1 && Array.isArray(data[0]))
+          return this.findRealTxnList(data[0], depth + 1);
+        if (Array.isArray(data)) {
+          for (const el of data) {
+            const found = this.findRealTxnList(el, depth + 1);
+            if (found) return found;
+          }
+        }
+        return null;
+      }
+
+  private async autoHealInvalidTransactionsUrl(
+        providerId: string,
+        session: any,
+        fallbackBusinessId?: string,
+      ): Promise<boolean> {
+        try {
+          const page = session?.page;
+          if (!page || (typeof page.isClosed === "function" && page.isClosed())) {
+            return false;
+          }
+
+          const currentUrl = String(page.url?.() || "");
+          const isMissingBusinessIdTxnUrl =
+            /^https:\/\/pay\.google\.com\/g4b\/transactions\/?(?:[?#].*)?$/i.test(currentUrl);
+          if (!isMissingBusinessIdTxnUrl) return false;
+
+          let businessId = session?.businessId || fallbackBusinessId;
+          if (!businessId) {
+            // Try DB credentials first when caller couldn't provide fallback.
+            const provider = await this.prisma.merchantProvider
+              .findUnique({ where: { id: providerId }, select: { credentials: true } })
+              .catch(() => null);
+            const creds = (provider?.credentials as any) || {};
+            businessId = creds?.businessId || "";
+          }
+
+          if (!businessId) {
+            // Last-resort discovery: open transactions root and extract businessId from redirected URL.
+            try {
+              await page.goto("https://pay.google.com/g4b/transactions", {
+                waitUntil: "domcontentloaded",
+                timeout: 15000,
+              });
+              const discoveredUrl = String(page.url?.() || "");
+              const match = discoveredUrl.match(/\/(?:activity|transactions)\/([^/?#]+)/i);
+              if (match?.[1]) {
+                businessId = match[1];
+                this.logger.log(
+                  `🔎 [DIAGNOSTIC] GPay discovered missing businessId for ${providerId}: ${businessId}`,
+                );
+              }
+            } catch {
+              // Ignore discovery navigation failure and continue to warning below.
+            }
+          }
+
+          if (!businessId) {
+            this.logger.warn(
+              `⚠️ GPay URL heal skipped for ${providerId}: transactions URL missing businessId and no fallback id available`,
+            );
+            return false;
+          }
+
+          const healedUrl = `https://pay.google.com/g4b/transactions/${businessId}`;
+          this.logger.warn(
+            `🩹 [DIAGNOSTIC] GPay invalid transactions URL detected for ${providerId} (${currentUrl}). Healing to ${healedUrl}`,
+          );
+          await page.goto(healedUrl, {
+            waitUntil: "domcontentloaded",
+            timeout: 30000,
+          });
+
+          // Attach discovered businessId for current in-memory session and DB restores.
+          if (!session?.businessId || session.businessId !== businessId) {
+            session.businessId = businessId;
+            try {
+              const provider = await this.prisma.merchantProvider.findUnique({
+                where: { id: providerId },
+                select: { credentials: true },
+              });
+              const credentials = (provider?.credentials as any) || {};
+              await this.prisma.merchantProvider.update({
+                where: { id: providerId },
+                data: {
+                  credentials: {
+                    ...credentials,
+                    businessId,
+                  },
+                },
+              });
+            } catch (e: any) {
+              this.logger.warn(
+                `⚠️ Could not persist discovered businessId for ${providerId}: ${e?.message || e}`,
+              );
+            }
+          }
+
+          return true;
+        } catch (err: any) {
+          this.logger.warn(
+            `⚠️ GPay URL heal failed for ${providerId}: ${err?.message || err}`,
+          );
+          return false;
+        }
+      }
 
   async forceDashboardRefresh(providerId: string): Promise<boolean> {
-    try {
-      const session = this.activeSessions.get(providerId);
-      if (!session) {
-        this.logger.warn(`Cannot force refresh: No active session for provider ${providerId}`);
-        return false;
+        try {
+          const session = this.activeSessions.get(providerId);
+          if (!session) {
+            this.logger.warn(`Cannot force refresh: No active session for provider ${providerId}`);
+            return false;
+          }
+          this.logger.log(`🔄 [DIAGNOSTIC] Forcing GPay dashboard refresh for ${providerId} to fetch missing notes...`);
+          await session.page.reload({ waitUntil: "domcontentloaded", timeout: 20000 });
+          // Clear the last load time so syncTransactions also knows it reloaded
+          this.lastRPTkabLoadAt.delete(providerId);
+          await new Promise((r) => setTimeout(r, 2500)); // allow RPtkab to fire and populate buffer
+          return true;
+        } catch (e: any) {
+          this.logger.warn(`⚠️ Failed to force GPay dashboard refresh for ${providerId}: ${e?.message}`);
+          return false;
+        }
       }
-      this.logger.log(`🔄 [DIAGNOSTIC] Forcing GPay dashboard refresh for ${providerId} to fetch missing notes...`);
-      await session.page.reload({ waitUntil: "domcontentloaded", timeout: 20000 });
-      // Clear the last load time so syncTransactions also knows it reloaded
-      this.lastRPTkabLoadAt.delete(providerId);
-      await new Promise((r) => setTimeout(r, 2500)); // allow RPtkab to fire and populate buffer
-      return true;
-    } catch (e: any) {
-      this.logger.warn(`⚠️ Failed to force GPay dashboard refresh for ${providerId}: ${e?.message}`);
-      return false;
-    }
-  }
 
   async syncTransactions(
-    provider: any,
-    fromDate: Date,
-    toDate: Date,
-    page: number = 1,
-    pageSize: number = 50,
-  ) {
-    if (this.syncingProviders.has(provider.id)) {
-      this.logger.warn(`⏭️ GPay sync already in progress for provider ${provider.id}, skipping`);
-      return { success: true, fetched: 0, transactions: [], message: 'Sync already in progress' };
-    }
-
-    this.syncingProviders.add(provider.id);
-
-    try {
-      let session = await this.ensureActiveSession(provider.id);
-
-      // Auto-restore if session is missing from memory but might exist in DB
-      if (!session) {
-        const restored = await this.restoreSession(provider.id);
-        if (restored) {
-          session = await this.ensureActiveSession(provider.id);
-        }
-      }
-
-      if (!session) {
-        this.logger.warn(`⚠️ No active GPay session for ${provider.id} — returning empty (session lives in browser memory)`);
-        return { success: true, fetched: 0, transactions: [], message: 'No active browser session' };
-      }
-
-      // Session heartbeat log (Critical for verification)
-      let currentUrl = "";
-      try {
-        currentUrl = session.page.url();
-      } catch {
-        const healed = await this.ensureActiveSession(provider.id);
-        if (!healed) {
-          this.logger.warn(`⚠️ GPay session became invalid for ${provider.id} (url failed) — returning empty`);
-          return { success: true, fetched: 0, transactions: [], message: 'No active browser session' };
-        }
-        session = healed;
-        currentUrl = session.page.url();
-      }
-      this.logger.log(`💓 [DIAGNOSTIC] GPay sync heartbeat for ${provider.id}. Browser status: ${provider.status}, URL: ${currentUrl}`);
-
-      const fallbackBusinessId =
-        provider?.connection?.credentials?.businessId ||
-        provider?.credentials?.businessId ||
-        undefined;
-      const healedInvalidTxnUrl = await this.autoHealInvalidTransactionsUrl(
-        provider.id,
-        session,
-        fallbackBusinessId,
-      );
-      if (healedInvalidTxnUrl) {
-        currentUrl = session.page.url();
-        this.logger.log(
-          `✅ [DIAGNOSTIC] GPay URL healed for ${provider.id}. Current URL: ${currentUrl}`,
-        );
-      }
-
-      // Self-heal stale DB state: if browser is live on GPay but DB still says EXPIRED,
-      // flip it back to ACTIVE so admin UI and validation logic stay consistent.
-      if (
-        provider.status === "EXPIRED" &&
-        typeof currentUrl === "string" &&
-        currentUrl.includes("pay.google.com/g4b")
+        provider: any,
+        fromDate: Date,
+        toDate: Date,
+        page: number = 1,
+        pageSize: number = 50,
       ) {
-        try {
-          await this.prisma.merchantProvider.update({
-            where: { id: provider.id },
-            data: { status: "ACTIVE" },
-          });
-          provider.status = "ACTIVE";
-          this.logger.log(
-            `🩹 [DIAGNOSTIC] Restored provider ${provider.id} status from EXPIRED -> ACTIVE (live GPay session detected)`,
-          );
-        } catch (e: any) {
-          this.logger.warn(
-            `Could not restore provider ${provider.id} status to ACTIVE: ${e?.message}`,
-          );
+        if (this.syncingProviders.has(provider.id)) {
+          this.logger.warn(`⏭️ GPay sync already in progress for provider ${provider.id}, skipping`);
+          return { success: true, fetched: 0, transactions: [], message: 'Sync already in progress' };
         }
-      }
 
-      const buildFiltered = () => {
-        const buffer = this.recentGPayPayments.get(provider.id) || [];
-        // Add 5 minutes to toDate to account for Google server clock being slightly ahead of local server clock
-        const adjustedToDate = new Date(toDate.getTime() + 5 * 60 * 1000);
-        return buffer.filter((t: any) => {
-          const ts = t.timestamp instanceof Date ? t.timestamp : new Date(t.timestamp);
-          return ts >= fromDate && ts <= adjustedToDate && t.status === 'COMPLETED';
-        });
-      };
+        this.syncingProviders.add(provider.id);
 
-      let filtered = buildFiltered();
-      const hasSeenRPTkab = this.lastRPTkabLoadAt.has(provider.id);
-
-      if (filtered.length === 0 && !hasSeenRPTkab) {
-        // RPtkab (initial list) may arrive a few seconds after restore/listener attach.
-        // On cold start (no RPtkab observed yet), wait longer to avoid returning 0 too early.
-        const waitAttempts = 15;
-        for (let i = 0; i < waitAttempts; i++) {
-          await new Promise((r) => setTimeout(r, 900));
-          filtered = buildFiltered();
-          if (filtered.length > 0) {
-            this.logger.log(
-              `⏳ [DIAGNOSTIC] GPay buffer populated after wait for provider ${provider.id}: ${filtered.length} txns`,
-            );
-            break;
-          }
-        }
-      }
-
-      if (filtered.length === 0 && !this.lastRPTkabLoadAt.has(provider.id)) {
         try {
-          await session.page.reload({
-            waitUntil: "domcontentloaded",
-            timeout: 20000,
-          });
-          await new Promise((r) => setTimeout(r, 2500));
-          filtered = buildFiltered();
-          if (filtered.length > 0) {
-            this.logger.log(
-              `🔄 [DIAGNOSTIC] GPay buffer repopulated after forced reload for provider ${provider.id}: ${filtered.length} txns`,
-            );
+          let session = await this.ensureActiveSession(provider.id);
+
+          // Auto-restore if session is missing from memory but might exist in DB
+          if (!session) {
+            const restored = await this.restoreSession(provider.id);
+            if (restored) {
+              session = await this.ensureActiveSession(provider.id);
+            }
           }
-        } catch (e: any) {
-          // If Playwright target died, try one self-heal restore and retry reload once.
-          if ((e?.message || "").toLowerCase().includes("has been closed")) {
-            this.logger.warn(
-              `⚠️ GPay reload failed due to closed target for ${provider.id}. Attempting restore and retry...`,
-            );
+
+          if (!session) {
+            this.logger.warn(`⚠️ No active GPay session for ${provider.id} — returning empty (session lives in browser memory)`);
+            return { success: true, fetched: 0, transactions: [], message: 'No active browser session' };
+          }
+
+          // Session heartbeat log (Critical for verification)
+          let currentUrl = "";
+          try {
+            currentUrl = session.page.url();
+          } catch {
             const healed = await this.ensureActiveSession(provider.id);
-            if (healed) {
-              session = healed;
-              try {
-                await session.page.reload({ waitUntil: "domcontentloaded", timeout: 20000 });
-                await new Promise((r) => setTimeout(r, 2500));
-                filtered = buildFiltered();
-              } catch (e2: any) {
-                this.logger.warn(
-                  `⚠️ GPay forced reload failed after restore for provider ${provider.id}: ${e2?.message}`,
+            if (!healed) {
+              this.logger.warn(`⚠️ GPay session became invalid for ${provider.id} (url failed) — returning empty`);
+              return { success: true, fetched: 0, transactions: [], message: 'No active browser session' };
+            }
+            session = healed;
+            currentUrl = session.page.url();
+          }
+          this.logger.log(`💓 [DIAGNOSTIC] GPay sync heartbeat for ${provider.id}. Browser status: ${provider.status}, URL: ${currentUrl}`);
+
+          const fallbackBusinessId =
+            provider?.connection?.credentials?.businessId ||
+            provider?.credentials?.businessId ||
+            undefined;
+          const healedInvalidTxnUrl = await this.autoHealInvalidTransactionsUrl(
+            provider.id,
+            session,
+            fallbackBusinessId,
+          );
+          if (healedInvalidTxnUrl) {
+            currentUrl = session.page.url();
+            this.logger.log(
+              `✅ [DIAGNOSTIC] GPay URL healed for ${provider.id}. Current URL: ${currentUrl}`,
+            );
+          }
+
+          // Self-heal stale DB state: if browser is live on GPay but DB still says EXPIRED,
+          // flip it back to ACTIVE so admin UI and validation logic stay consistent.
+          if (
+            provider.status === "EXPIRED" &&
+            typeof currentUrl === "string" &&
+            currentUrl.includes("pay.google.com/g4b")
+          ) {
+            try {
+              await this.prisma.merchantProvider.update({
+                where: { id: provider.id },
+                data: { status: "ACTIVE" },
+              });
+              provider.status = "ACTIVE";
+              this.logger.log(
+                `🩹 [DIAGNOSTIC] Restored provider ${provider.id} status from EXPIRED -> ACTIVE (live GPay session detected)`,
+              );
+            } catch (e: any) {
+              this.logger.warn(
+                `Could not restore provider ${provider.id} status to ACTIVE: ${e?.message}`,
+              );
+            }
+          }
+
+          const buildFiltered = () => {
+            const buffer = this.recentGPayPayments.get(provider.id) || [];
+            // Add 5 minutes to toDate to account for Google server clock being slightly ahead of local server clock
+            const adjustedToDate = new Date(toDate.getTime() + 5 * 60 * 1000);
+            return buffer.filter((t: any) => {
+              const ts = t.timestamp instanceof Date ? t.timestamp : new Date(t.timestamp);
+              return ts >= fromDate && ts <= adjustedToDate && t.status === 'COMPLETED';
+            });
+          };
+
+          let filtered = buildFiltered();
+          const hasSeenRPTkab = this.lastRPTkabLoadAt.has(provider.id);
+
+          if (filtered.length === 0 && !hasSeenRPTkab) {
+            // RPtkab (initial list) may arrive a few seconds after restore/listener attach.
+            // On cold start (no RPtkab observed yet), wait longer to avoid returning 0 too early.
+            const waitAttempts = 15;
+            for (let i = 0; i < waitAttempts; i++) {
+              await new Promise((r) => setTimeout(r, 900));
+              filtered = buildFiltered();
+              if (filtered.length > 0) {
+                this.logger.log(
+                  `⏳ [DIAGNOSTIC] GPay buffer populated after wait for provider ${provider.id}: ${filtered.length} txns`,
                 );
+                break;
               }
             }
           }
-          this.logger.warn(
-            `⚠️ GPay forced reload failed for provider ${provider.id}: ${e?.message}`,
-          );
+
+          if (filtered.length === 0 && !this.lastRPTkabLoadAt.has(provider.id)) {
+            try {
+              await session.page.reload({
+                waitUntil: "domcontentloaded",
+                timeout: 20000,
+              });
+              await new Promise((r) => setTimeout(r, 2500));
+              filtered = buildFiltered();
+              if (filtered.length > 0) {
+                this.logger.log(
+                  `🔄 [DIAGNOSTIC] GPay buffer repopulated after forced reload for provider ${provider.id}: ${filtered.length} txns`,
+                );
+              }
+            } catch (e: any) {
+              // If Playwright target died, try one self-heal restore and retry reload once.
+              if ((e?.message || "").toLowerCase().includes("has been closed")) {
+                this.logger.warn(
+                  `⚠️ GPay reload failed due to closed target for ${provider.id}. Attempting restore and retry...`,
+                );
+                const healed = await this.ensureActiveSession(provider.id);
+                if (healed) {
+                  session = healed;
+                  try {
+                    await session.page.reload({ waitUntil: "domcontentloaded", timeout: 20000 });
+                    await new Promise((r) => setTimeout(r, 2500));
+                    filtered = buildFiltered();
+                  } catch (e2: any) {
+                    this.logger.warn(
+                      `⚠️ GPay forced reload failed after restore for provider ${provider.id}: ${e2?.message}`,
+                    );
+                  }
+                }
+              }
+              this.logger.warn(
+                `⚠️ GPay forced reload failed for provider ${provider.id}: ${e?.message}`,
+              );
+            }
+          }
+
+          const adjustedToDateFinal = new Date(toDate.getTime() + 5 * 60 * 1000);
+          const finalized = filtered.filter((t: any) => {
+            const ts = t.timestamp instanceof Date ? t.timestamp : new Date(t.timestamp);
+            return ts >= fromDate && ts <= adjustedToDateFinal && t.status === 'COMPLETED';
+          });
+
+          this.logger.log(`📦 Returning ${finalized.length} transactions from live buffer for provider ${provider.id}`);
+
+          const transactions = finalized.map((t: any) => {
+            const tsSec = Math.floor(t.timestamp.getTime() / 1000);
+            const tsNanos = (t.timestamp.getTime() % 1000) * 1_000_000;
+            return [
+              t.txnId,
+              t.utr,
+              [tsSec, tsNanos],
+              ["INR", t.amount],
+              1,
+              4, // SUCCESS
+              [],
+              [tsSec],
+              [t.customerName, t.customerVpa],
+              t.note || null,
+              5
+            ];
+          });
+
+          return {
+            success: true,
+            fetched: transactions.length,
+            transactions,
+            message: `${transactions.length} from live buffer`,
+          };
+        } finally {
+          this.syncingProviders.delete(provider.id);
         }
       }
-
-      const adjustedToDateFinal = new Date(toDate.getTime() + 5 * 60 * 1000);
-      const finalized = filtered.filter((t: any) => {
-        const ts = t.timestamp instanceof Date ? t.timestamp : new Date(t.timestamp);
-        return ts >= fromDate && ts <= adjustedToDateFinal && t.status === 'COMPLETED';
-      });
-
-      this.logger.log(`📦 Returning ${finalized.length} transactions from live buffer for provider ${provider.id}`);
-
-      const transactions = finalized.map((t: any) => {
-        const tsSec = Math.floor(t.timestamp.getTime() / 1000);
-        const tsNanos = (t.timestamp.getTime() % 1000) * 1_000_000;
-        return [
-          t.txnId,
-          t.utr,
-          [tsSec, tsNanos],
-          ["INR", t.amount],
-          1,
-          4, // SUCCESS
-          [],
-          [tsSec],
-          [t.customerName, t.customerVpa],
-          t.note || null,
-          5
-        ];
-      });
-
-      return {
-        success: true,
-        fetched: transactions.length,
-        transactions,
-        message: `${transactions.length} from live buffer`,
-      };
-    } finally {
-      this.syncingProviders.delete(provider.id);
-    }
-  }
 
 
 
   private async checkProviderLimit(
-    organizationId: string,
-    providerCode: string,
-  ): Promise<void> {
-    try {
-      const subscriptionServiceUrl =
-        process.env.SUBSCRIPTION_SERVICE_URL;
-      const axios = require("axios");
-      await axios.get(
-        `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/provider-access/${providerCode}`,
-      );
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
-        throw new BadRequestException(
-          err?.response?.data?.message || "Provider limit reached for your plan",
-        );
+        organizationId: string,
+        providerCode: string,
+      ): Promise<void> {
+        try {
+          const subscriptionServiceUrl =
+            process.env.SUBSCRIPTION_SERVICE_URL;
+          const axios = require("axios");
+          await axios.get(
+            `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/provider-access/${providerCode}`,
+          );
+        } catch (err: any) {
+          if (err?.response?.status === 403) {
+            throw new BadRequestException(
+              err?.response?.data?.message || "Provider limit reached for your plan",
+            );
+          }
+        }
       }
-    }
-  }
 
   private async safeTakeScreenshot(page: any): Promise<string | undefined> {
-    try {
-      // Screenshot can be slow on Google challenge pages; never block connect-gpay too long.
-      const buf = await page.screenshot({
-        type: "jpeg",
-        quality: 85,
-        timeout: 2500,
-      });
-      return Buffer.from(buf).toString("base64");
-    } catch {
-      return undefined;
-    }
+        try {
+          // Screenshot can be slow on Google challenge pages; never block connect-gpay too long.
+          const buf = await page.screenshot({
+            type: "jpeg",
+            quality: 85,
+            timeout: 2500,
+          });
+          return Buffer.from(buf).toString("base64");
+        } catch {
+          return undefined;
+        }
+      }
+
+  private async forwardToNewGpayService(
+    endpoint: string,
+    body: any,
+  ): Promise<any> {
+    const axios = require('axios');
+    const gpayUrl = process.env.GPAY_SERVICE_URL || 'http://localhost:4007';
+    const token = process.env.INTERNAL_TOKEN || 'default-internal-token';
+    const url = `${gpayUrl}${endpoint}`;
+    this.logger.log(`[Coordinator] Forwarding request to new runtime: ${url}`);
+    const res = await axios.post(url, body, {
+      headers: {
+        'x-internal-token': token,
+        'Content-Type': 'application/json',
+      },
+    });
+    return res.data;
   }
 }
-

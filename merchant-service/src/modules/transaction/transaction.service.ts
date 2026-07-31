@@ -237,7 +237,7 @@ export class TransactionService {
               error: error.message,
             });
           }
-        } else if (provider.providerType === "GPAY") {
+        } else if (provider.providerType === "GPAY" && (provider.metadata as any)?.gpayRuntime !== "NEW") {
           try {
             const gpayResult = await this.syncGPayTransactions(
               provider,
@@ -502,7 +502,7 @@ export class TransactionService {
               error: error.message,
             });
           }
-        } else if (provider.providerType === "GPAY") {
+        } else if (provider.providerType === "GPAY" && (provider.metadata as any)?.gpayRuntime !== "NEW") {
           try {
             // GPay usually allows fetching larger history, let's try chunks
             const chunks = this.splitDateRangeIntoChunks(fromDate, toDate, 31);
