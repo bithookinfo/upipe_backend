@@ -119,7 +119,7 @@ export class GatewayController {
         "Access-Control-Allow-Methods":
           "GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD",
         "Access-Control-Allow-Headers":
-          "Content-Type, Authorization, Accept, Origin, X-Requested-With, x-organization-id, x-user-id, x-cookie-consent",
+          "Content-Type, Authorization, Accept, Origin, X-Requested-With, x-organization-id, x-user-id, x-cookie-consent, x-api-key",
         "Access-Control-Allow-Credentials": "true",
         "Access-Control-Max-Age": "86400",
       });
@@ -197,6 +197,7 @@ export class GatewayController {
       delete proxyHeaders["x-user-id"];
       delete proxyHeaders["x-user-type"];
       delete proxyHeaders["x-user-role"];
+      delete proxyHeaders["x-internal-token"];
 
       if (userId) {
         proxyHeaders["x-user-id"] = userId;

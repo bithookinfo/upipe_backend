@@ -4,6 +4,8 @@ import { PrismaService } from "../../prisma/prisma.service";
 import { PaytmSimpleService } from "../provider/paytm-simple.service";
 import { PhonePeSimpleService } from "../provider/phonepe-simple.service";
 import { BharatPeSimpleService } from "../provider/bharatpe-simple.service";
+import { QuintusPaySimpleService } from "../provider/quintuspay-simple.service";
+import { HdfcVyaparService } from "../provider/hdfc-vyapar.service";
 import { GpayService } from "../gpay/gpay.service";
 import { NotFoundException } from "@nestjs/common";
 import {
@@ -33,6 +35,12 @@ describe("TransactionService", () => {
     gpayService = {
       fetchTransactionHistory: jest.fn(),
     };
+    const quintusPayService = {
+      fetchTransactionHistory: jest.fn(),
+    };
+    const hdfcService = {
+      fetchTransactionHistory: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -54,8 +62,16 @@ describe("TransactionService", () => {
           useValue: bharatpeService,
         },
         {
+          provide: QuintusPaySimpleService,
+          useValue: quintusPayService,
+        },
+        {
           provide: GpayService,
           useValue: gpayService,
+        },
+        {
+          provide: HdfcVyaparService,
+          useValue: hdfcService,
         },
       ],
     }).compile();
@@ -86,20 +102,20 @@ describe("TransactionService", () => {
         }),
       ) as any;
 
-      const result = await service.getTransactions(merchantId);
+      const result = await service.getTransactions(merchantId, "org-1");
 
       expect(result.success).toBe(true);
-      expect(prismaService.merchant.findUnique).toHaveBeenCalledWith({
-        where: { id: merchantId },
+      expect(prismaService.merchant.findFirst).toHaveBeenCalledWith({
+        where: { id: merchantId, organizationId: "org-1", deletedAt: null },
       });
     });
 
     it("should throw NotFoundException if merchant not found", async () => {
-      prismaService.merchant.findUnique.mockResolvedValue(null);
+      prismaService.merchant.findFirst.mockResolvedValue(null);
 
-      await expect(service.getTransactions("nonexistent")).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(
+        service.getTransactions("nonexistent", "org-1"),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -108,10 +124,11 @@ describe("TransactionService", () => {
       const merchantId = "merchant-123";
       const mockMerchant = {
         id: merchantId,
+        organizationId: "org-1",
         providers: [createMockProvider()],
       };
 
-      prismaService.merchant.findUnique.mockResolvedValue(mockMerchant);
+      prismaService.merchant.findFirst.mockResolvedValue(mockMerchant as any);
       paytmService.fetchTransactionHistory.mockResolvedValue({
         success: true,
         transactions: [],
@@ -119,6 +136,7 @@ describe("TransactionService", () => {
 
       const result = await service.syncTransactions(
         merchantId,
+        "org-1",
         new Date(),
         new Date(),
       );
@@ -131,16 +149,18 @@ describe("TransactionService", () => {
       const merchantId = "merchant-123";
       const mockMerchant = {
         id: merchantId,
+        organizationId: "org-1",
         providers: [createMockProvider()],
       };
 
-      prismaService.merchant.findUnique.mockResolvedValue(mockMerchant);
+      prismaService.merchant.findFirst.mockResolvedValue(mockMerchant as any);
       paytmService.fetchTransactionHistory.mockRejectedValue(
         new Error("API Error"),
       );
 
       const result = await service.syncTransactions(
         merchantId,
+        "org-1",
         new Date(),
         new Date(),
       );
@@ -153,11 +173,12 @@ describe("TransactionService", () => {
   describe("getTransactionStats", () => {
     it("should return stats for merchant", async () => {
       const merchantId = "merchant-123";
-      prismaService.merchant.findUnique.mockResolvedValue({
+      prismaService.merchant.findFirst.mockResolvedValue({
         id: merchantId,
-      });
+        organizationId: "org-1",
+      } as any);
 
-      const result = await service.getTransactionStats(merchantId);
+      const result = await service.getTransactionStats(merchantId, "org-1");
 
       expect(result.success).toBe(true);
       expect(result.stats).toBeDefined();

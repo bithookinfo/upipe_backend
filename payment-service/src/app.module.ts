@@ -20,6 +20,7 @@ import { StatsController } from './stats/stats.controller';
 import { CronService } from './services/cron.service';
 import { HealthMonitorService } from './services/health-monitor.service';
 import { InternalNotificationsController } from './controllers/internal-notifications.controller';
+import { InternalGpayController } from './controllers/internal-gpay.controller';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -28,7 +29,7 @@ import { InternalNotificationsController } from './controllers/internal-notifica
     }),
     ScheduleModule.forRoot(),
   ],
-  controllers: [HealthController, SimpleOrdersController, DashboardController, ProvidersController, WebhookController, TransactionsController, PaymentPageController, StatsController, OrdersSseController,InternalNotificationsController],
+  controllers: [HealthController, SimpleOrdersController, DashboardController, ProvidersController, WebhookController, TransactionsController, PaymentPageController, StatsController, OrdersSseController,InternalNotificationsController, InternalGpayController],
   providers: [PrismaService, OrdersService, DashboardService, WebhookService, CallbackService, PaymentLinkService, QrcodeService, CronService, HealthMonitorService, InAppNotificationsService, OrderEventsService]
 })
 export class AppModule { }
