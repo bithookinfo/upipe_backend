@@ -349,7 +349,15 @@ export class RealSubscriptionController implements OnModuleInit {
   async getPurchaseDetails(
     @Param('purchaseId') purchaseId: string,
     @Query('force') force?: string,
+    @Headers('x-organization-id') reqOrgId?: string,
+    @Headers('x-user-type') userType?: string,
+    @Headers('x-is-super-admin') isSuperAdmin?: string
   ) {
-    return this.realSubscriptionService.getPurchaseDetails(purchaseId, force === 'true');
+    return this.realSubscriptionService.getPurchaseDetails(
+      purchaseId,
+      force === 'true',
+      reqOrgId,
+      isSuperAdmin === 'true' || userType?.toUpperCase() === 'SUPER_ADMIN' || userType?.toUpperCase() === 'SUPERADMIN'
+    );
   }
 }

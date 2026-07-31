@@ -490,34 +490,62 @@ export class UnlockService {
   }
 
   private async getPlatformConfig(key: string) {
+    const merchantServiceUrl = process.env.MERCHANT_SERVICE_URL;
+
+    const isMerchantActiveAndValid = async (merchantId: string): Promise<boolean> => {
+      if (!merchantId || !merchantServiceUrl) return false;
+      try {
+        const res = await axios.get(`${merchantServiceUrl}/merchant/${merchantId}?includeDeleted=false`, {
+          timeout: 4000,
+          headers: { "x-internal-token": process.env.INTERNAL_TOKEN }
+        });
+        const m = res.data?.merchant || res.data;
+        if (!m || m.deletedAt || m.isDeleted || m.isActive === false || m.status === "DEACTIVATED") {
+          return false;
+        }
+        return true;
+      } catch (err: any) {
+        this.logger.warn(`⚠️ Platform merchant validation failed for ${merchantId}: ${err?.message}`);
+        return false;
+      }
+    };
+
     // 1. Try explicit DB config first
     const config = await this.prisma.platformConfig.findUnique({
       where: { key },
     });
     if (config?.value && (config.value as any)?.merchantId) {
-      return config.value as any;
+      const dbMerchantId = (config.value as any).merchantId;
+      const isValid = await isMerchantActiveAndValid(dbMerchantId);
+      if (isValid) {
+        return config.value as any;
+      }
+      this.logger.warn(`⚠️ DB platform merchant ${dbMerchantId} is inactive or deleted. Falling back to auto-discovery.`);
     }
 
-    // 2. Auto-discover: query merchant-service for any merchant with isPlatform: true
+    // 2. Auto-discover: query merchant-service for any active, non-deleted merchant with isPlatform: true
     try {
-      this.logger.log("🔍 Platform merchant not in DB config. Auto-discovering...");
-      const merchantServiceUrl = process.env.MERCHANT_SERVICE_URL;
+      this.logger.log("🔍 Platform merchant auto-discovering active merchants...");
       if (!merchantServiceUrl) {
         this.logger.error("❌ MERCHANT_SERVICE_URL not set in env");
         return null;
       }
 
       const response = await axios.get(`${merchantServiceUrl}/merchants/users`, {
-        params: { limit: 1 },
+        params: { limit: 50 },
         timeout: 5000,
         headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-user-type": "SUPER_ADMIN" }
       });
 
       const merchants = response.data?.data || response.data?.merchants || [];
-      const platformMerchant = merchants.find((m: any) => m.isActive) || merchants[0];
+      const platformMerchant = merchants.find(
+        (m: any) => (m.isPlatform || m.isSuperAdmin) && m.isActive && !m.deletedAt && !m.isDeleted && m.status !== "DEACTIVATED"
+      ) || merchants.find(
+        (m: any) => m.isActive && !m.deletedAt && !m.isDeleted && m.status !== "DEACTIVATED"
+      );
 
       if (platformMerchant) {
-        this.logger.log(`✅ Auto-discovered platform merchant: ${platformMerchant.id} (${platformMerchant.name})`);
+        this.logger.log(`✅ Auto-discovered active platform merchant: ${platformMerchant.id} (${platformMerchant.name})`);
         return {
           merchantId: platformMerchant.id,
           organizationId: platformMerchant.organizationId,

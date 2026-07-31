@@ -1287,33 +1287,36 @@ export class MerchantService {
     }
   }
 
-  async canGeneratePaymentAssets(merchantId: string, organizationId: string, bypass: boolean = false) {
-    if (bypass) {
-      this.logger.log(`🛡️ Bypassing payment asset validation for ${merchantId} (Platform Internal)`);
-      return { canGenerate: true };
-    }
+  async canGeneratePaymentAssets(merchantId: string, organizationId?: string, bypass: boolean = false) {
     try {
+      const whereClause: any = { id: merchantId };
+      if (organizationId) whereClause.organizationId = organizationId;
+
       const merchant = await this.prisma.merchant.findFirst({
-        where: { id: merchantId, organizationId },
+        where: whereClause,
         include: { config: true },
       });
 
-      if (!merchant) {
+      if (!merchant || merchant.deletedAt) {
         return {
           canGenerate: false,
           reason: "MERCHANT_NOT_FOUND",
-          message: "Merchant not found",
+          message: "Merchant not found or deleted",
         };
       }
 
-      // Same validations as transaction but without amount
-      if (!merchant.isActive) {
+      if (!merchant.isActive || merchant.status === "DEACTIVATED") {
         return {
           canGenerate: false,
           reason: "MERCHANT_INACTIVE",
           message:
             "Merchant account is deactivated. Cannot generate QR codes or payment links.",
         };
+      }
+
+      if (bypass) {
+        this.logger.log(`🛡️ Bypassing transaction limit and operating hours validation for ${merchantId} (Platform Internal)`);
+        return { canGenerate: true };
       }
 
       if (merchant.status !== "ACTIVE") {

@@ -11,6 +11,7 @@ import {
   Logger,
   Headers,
   HttpCode,
+  Req,
 } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse } from "@nestjs/swagger";
 import { ConfigService } from "@nestjs/config";
@@ -2332,7 +2333,11 @@ export class SimpleOrdersController {
   @ApiOperation({ summary: "Get all orders with real data from database" })
   @ApiResponse({ status: 200, description: "Orders retrieved successfully" })
   async getOrders(
+    @Req() req: any,
     @Headers("x-organization-id") headerOrgId: string,
+    @Headers("x-api-key") headerApiKey?: string,
+    @Query("key") keyQuery?: string,
+    @Query("apiKey") apiKeyQuery?: string,
     @Query("page") page: string = "1",
     @Query("limit") limit: string = "20",
     @Query("organizationId") organizationIdQuery?: string,
@@ -2345,10 +2350,52 @@ export class SimpleOrdersController {
     @Query("includePlatform") includePlatformQuery?: string,
     @Query("paymentApp") paymentApp?: string,
   ) {
-    const organizationId =
-      organizationIdQuery ||
-      (headerOrgId === "platform-org-id" ? undefined : headerOrgId) ||
-      undefined;
+    const bodyKey = req?.body?.key || req?.body?.apiKey;
+    const apiKey = keyQuery || apiKeyQuery || headerApiKey || bodyKey;
+    let organizationId: string | undefined = undefined;
+
+    if (apiKey) {
+      const resolved = await this.resolveOrgId(headerOrgId, apiKey);
+      if (resolved) {
+        organizationId = resolved;
+      } else {
+        return {
+          success: false,
+          code: 4000,
+          msg: "Invalid API key. Please check your API key and try again.",
+          data: [],
+          pagination: {
+            page: parseInt(page, 10) || 1,
+            limit: parseInt(limit, 10) || 20,
+            total: 0,
+            totalPages: 0,
+          },
+        };
+      }
+    }
+
+    if (!organizationId) {
+      organizationId =
+        organizationIdQuery ||
+        (headerOrgId === "platform-org-id" ? undefined : headerOrgId) ||
+        undefined;
+    }
+
+    const isPlatformAdmin = headerOrgId === "platform-org-id";
+    if (!organizationId && !isPlatformAdmin && includePlatformQuery !== "true") {
+      return {
+        success: false,
+        code: 4001,
+        msg: "Organization ID or valid API Key is required.",
+        data: [],
+        pagination: {
+          page: parseInt(page, 10) || 1,
+          limit: parseInt(limit, 10) || 20,
+          total: 0,
+          totalPages: 0,
+        },
+      };
+    }
 
     // When a specific status is requested (COMPLETED, PENDING, FAILED, EXPIRED),
     // we always respect that and do NOT apply excludeExpired.
@@ -2362,7 +2409,7 @@ export class SimpleOrdersController {
 
     const includePlatform = includePlatformQuery !== undefined
       ? includePlatformQuery.toLowerCase() === "true"
-      : (!headerOrgId || headerOrgId === "platform-org-id");
+      : isPlatformAdmin;
 
     return this.ordersService.getOrders(
       parseInt(page, 10),

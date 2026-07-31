@@ -348,7 +348,12 @@ export class MerchantsController {
   }
   @Get("users/:id/stats")
   @ApiOperation({ summary: "Get merchant specific stats" })
-  async getMerchantStats(@Param("id") id: string) {
+  async getMerchantStats(
+    @Param("id") id: string,
+    @Headers('x-user-type') userType?: string,
+    @Headers('x-is-super-admin') isSuperAdmin?: string
+  ) {
+    this.validateSuperAdmin(isSuperAdmin, userType);
     const paymentServiceUrl = process.env.PAYMENT_SERVICE_URL;
     try {
       const axios = require("axios");
@@ -378,7 +383,12 @@ export class MerchantsController {
 
   @Get("users/:id/actions")
   @ApiOperation({ summary: "Get merchant specific actions/audit logs" })
-  async getMerchantActions(@Param("id") id: string) {
+  async getMerchantActions(
+    @Param("id") id: string,
+    @Headers('x-user-type') userType?: string,
+    @Headers('x-is-super-admin') isSuperAdmin?: string
+  ) {
+    this.validateSuperAdmin(isSuperAdmin, userType);
     // Placeholder: Fetch from audit logs or local history
     return {
       success: true,
@@ -423,7 +433,11 @@ export class MerchantsController {
 
   @Get("categories-distribution")
   @ApiOperation({ summary: "Get merchant distribution by business category" })
-  async getCategoriesDistribution() {
+  async getCategoriesDistribution(
+    @Headers('x-user-type') userType?: string,
+    @Headers('x-is-super-admin') isSuperAdmin?: string
+  ) {
+    this.validateSuperAdmin(isSuperAdmin, userType);
     const merchants = await this.prisma.merchant.findMany({
       where: { 
         isActive: true, 
