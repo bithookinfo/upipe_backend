@@ -193,7 +193,7 @@ async function main() {
     for (const plan of plans) {
         await prisma.subscriptionPlan.upsert({
             where: { code: plan.code },
-            update: plan,
+            update: { ...plan, deletedAt: null },
             create: plan,
         });
         console.log(`✅ Seeded plan: ${plan.name} (₹${plan.price}/${plan.billingCycle.toLowerCase()})`);
