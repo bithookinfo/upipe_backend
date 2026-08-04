@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Put, Delete, Param, Body, Headers, Query, Ip, HttpException, HttpStatus, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Put, Delete, Param, Body, Headers, Query, Ip, HttpException, HttpStatus,ForbiddenException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiParam } from '@nestjs/swagger';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealSubscriptionService } from '../services/real-subscription.service';
@@ -11,13 +11,11 @@ export class SubscriptionAssignmentController {
     constructor(
         private readonly prisma: PrismaService,
         private readonly subscriptionService: RealSubscriptionService,
-    ) { }
+    ) {}
 
     private validateSuperAdmin(isSuperAdmin?: string, userType?: string) {
-        if (userType && !['SUPER_ADMIN', 'SUPERADMIN'].includes(userType.toUpperCase())) {
-            throw new ForbiddenException("Super admin access required");
-        }
-        return;
+        if (isSuperAdmin === 'true' || userType?.toUpperCase() === 'SUPER_ADMIN' || userType?.toUpperCase() === 'SUPERADMIN' || userType?.toUpperCase() === 'SUPER_ADMIN') return;
+        throw new ForbiddenException("Super admin access required");
     }
 
     @Get('plans')
@@ -93,7 +91,7 @@ export class SubscriptionAssignmentController {
         if (!plan) return { success: false, message: 'Plan not found', data: null };
 
         // Check if this is a metadata-only update (e.g., toggling visibility/features)
-        const isMetadataOnlyUpdate = Object.keys(body).every(key =>
+        const isMetadataOnlyUpdate = Object.keys(body).every(key => 
             ['isActive', 'isPublic', 'isFeatured', 'sortOrder'].includes(key)
         );
 
@@ -116,28 +114,28 @@ export class SubscriptionAssignmentController {
             if (activeSubscriptions.length > 0) {
                 const orgIds = activeSubscriptions.map(s => s.organizationId);
                 const organizations = [];
-
+                
                 try {
                     const orgUrl = process.env.ORGANIZATION_SERVICE_URL;
                     if (orgUrl) {
                         for (const orgId of orgIds.slice(0, 25)) {
                             try {
-                                const res = await axios.get(`${orgUrl}/organizations/${orgId}`, {
-                                    headers: { 'x-user-type': 'SUPER_ADMIN' }
-                                });
-                                organizations.push({
-                                    id: orgId,
-                                    name: res.data?.data?.organization?.name || res.data?.data?.name || orgId
-                                });
+                               const res = await axios.get(`${orgUrl}/organizations/${orgId}`, {
+                                 headers: { 'x-user-type': 'SUPER_ADMIN' }
+                               });
+                               organizations.push({
+                                   id: orgId,
+                                   name: res.data?.data?.organization?.name || res.data?.data?.name || orgId
+                               });
                             } catch (e) {
-                                organizations.push({ id: orgId, name: orgId });
+                               organizations.push({ id: orgId, name: orgId });
                             }
                         }
                     } else {
                         organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
                     }
                 } catch (err) {
-                    organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
+                   organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
                 }
 
                 throw new HttpException({
@@ -216,7 +214,7 @@ export class SubscriptionAssignmentController {
         @Headers('x-is-super-admin') isSuperAdmin?: string
     ) {
         this.validateSuperAdmin(isSuperAdmin, userType);
-
+        
         // Ensure plan exists
         const plan = await this.prisma.subscriptionPlan.findUnique({ where: { id } });
         if (!plan) return { success: false, message: 'Plan not found', data: null };
@@ -241,22 +239,22 @@ export class SubscriptionAssignmentController {
 
         const orgIds = activeSubscriptions.map(s => s.organizationId);
         const organizations = [];
-
+        
         try {
             const orgUrl = process.env.ORGANIZATION_SERVICE_URL;
             if (orgUrl) {
                 for (const orgId of orgIds.slice(0, 25)) {
                     try {
-                        const axios = require('axios');
-                        const res = await axios.get(`${orgUrl}/organizations/${orgId}`, {
-                            headers: { 'x-user-type': 'SUPER_ADMIN' }
-                        });
-                        organizations.push({
-                            id: orgId,
-                            name: res.data?.data?.organization?.name || res.data?.data?.name || orgId
-                        });
+                       const axios = require('axios');
+                       const res = await axios.get(`${orgUrl}/organizations/${orgId}`, {
+                         headers: { 'x-user-type': 'SUPER_ADMIN' }
+                       });
+                       organizations.push({
+                           id: orgId,
+                           name: res.data?.data?.organization?.name || res.data?.data?.name || orgId
+                       });
                     } catch (e) {
-                        organizations.push({ id: orgId, name: orgId });
+                       organizations.push({ id: orgId, name: orgId });
                     }
                 }
             } else {
@@ -271,7 +269,7 @@ export class SubscriptionAssignmentController {
         const message = activeSubscriptions.length > 25
             ? `Plan is currently actively assigned to ${activeSubscriptions.length}+ organizations and cannot be deleted.`
             : `Plan is currently actively assigned to ${activeSubscriptions.length} organizations and cannot be deleted.`;
-
+            
         return {
             success: true,
             data: {
@@ -290,7 +288,7 @@ export class SubscriptionAssignmentController {
         @Headers('x-is-super-admin') isSuperAdmin?: string
     ) {
         this.validateSuperAdmin(isSuperAdmin, userType);
-
+        
         // Ensure plan exists
         const plan = await this.prisma.subscriptionPlan.findUnique({ where: { id } });
         if (!plan) return { success: false, message: 'Plan not found', data: null };
@@ -312,29 +310,29 @@ export class SubscriptionAssignmentController {
         if (activeSubscriptions.length > 0) {
             const orgIds = activeSubscriptions.map(s => s.organizationId);
             const organizations = [];
-
+            
             try {
                 const orgUrl = process.env.ORGANIZATION_SERVICE_URL;
                 if (orgUrl) {
                     for (const orgId of orgIds.slice(0, 25)) {
                         try {
-                            const axios = require('axios');
-                            const res = await axios.get(`${orgUrl}/organizations/${orgId}`, {
-                                headers: { 'x-user-type': 'SUPER_ADMIN' }
-                            });
-                            organizations.push({
-                                id: orgId,
-                                name: res.data?.data?.organization?.name || res.data?.data?.name || orgId
-                            });
+                           const axios = require('axios');
+                           const res = await axios.get(`${orgUrl}/organizations/${orgId}`, {
+                             headers: { 'x-user-type': 'SUPER_ADMIN' }
+                           });
+                           organizations.push({
+                               id: orgId,
+                               name: res.data?.data?.organization?.name || res.data?.data?.name || orgId
+                           });
                         } catch (e) {
-                            organizations.push({ id: orgId, name: orgId });
+                           organizations.push({ id: orgId, name: orgId });
                         }
                     }
                 } else {
                     organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
                 }
             } catch (err) {
-                organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
+               organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
             }
 
             throw new HttpException({
