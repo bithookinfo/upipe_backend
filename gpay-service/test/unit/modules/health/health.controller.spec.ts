@@ -1,9 +1,9 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { HealthController } from './health.controller';
-import { MetricsService } from './metrics.service';
-import { InternalAuthGuard } from '../../common/guards/internal-auth.guard';
+import { HealthController } from '../../../../src/modules/health/health.controller';
+import { MetricsService } from '../../../../src/modules/health/metrics.service';
+import { InternalAuthGuard } from '../../../../src/common/guards/internal-auth.guard';
 
 describe('HealthController', () => {
   let controller: HealthController;

@@ -1,6 +1,14 @@
-import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GpayRpcParserService, GpayParsedTransaction } from './gpay-rpc-parser.service';
+import {
+  GpayRpcParserService,
+  GpayParsedTransaction,
+} from './gpay-rpc-parser.service';
 import { RedisService } from '../../common/redis/redis.service';
 import { GpayPaymentEventProducer } from './queue/gpay-payment-event.producer';
 import { BrowserPoolService } from './browser-pool.service';
@@ -11,11 +19,22 @@ export class GpayRpcListenerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(GpayRpcListenerService.name);
   private readonly redisTtlSeconds: number;
   private readonly appendScript = `
-    local key = KEYS[1]
-    local val = ARGV[1]
-    local ttl = tonumber(ARGV[2])
-    redis.call("rpush", key, val)
-    redis.call("expire", key, ttl)
+    local listKey = KEYS[1]
+    local hashKey = listKey .. ':dedup'
+    local txnId = ARGV[1]
+    local val = ARGV[2]
+    local ttl = tonumber(ARGV[3])
+
+    if redis.call("HEXISTS", hashKey, txnId) == 1 then
+      return 0
+    end
+
+    redis.call("HSET", hashKey, txnId, "1")
+    redis.call("RPUSH", listKey, val)
+    redis.call("LTRIM", listKey, -200, -1)
+    
+    redis.call("EXPIRE", listKey, ttl)
+    redis.call("EXPIRE", hashKey, ttl)
     return 1
   `;
 
@@ -54,8 +73,10 @@ export class GpayRpcListenerService implements OnModuleInit, OnModuleDestroy {
           return;
         }
 
-        const isRPtkab = url.includes('batchexecute') && url.includes('rpcids=RPtkab');
-        const isYuZqtb = url.includes('batchexecute') && url.includes('rpcids=yuZqtb');
+        const isRPtkab =
+          url.includes('batchexecute') && url.includes('rpcids=RPtkab');
+        const isYuZqtb =
+          url.includes('batchexecute') && url.includes('rpcids=yuZqtb');
 
         if (!isRPtkab && !isYuZqtb && !url.includes('notifications')) {
           return;
@@ -68,13 +89,17 @@ export class GpayRpcListenerService implements OnModuleInit, OnModuleDestroy {
 
         let parsedTransactions: any[] = [];
         if (isRPtkab || isYuZqtb) {
-          parsedTransactions = this.rpcParser.parseBatchexecuteResponse(rawText);
+          parsedTransactions =
+            this.rpcParser.parseBatchexecuteResponse(rawText);
         } else {
           const notif = this.rpcParser.parsePushNotification(rawText);
           if (notif) parsedTransactions = [notif];
         }
 
-        if (!Array.isArray(parsedTransactions) || parsedTransactions.length === 0) {
+        if (
+          !Array.isArray(parsedTransactions) ||
+          parsedTransactions.length === 0
+        ) {
           return;
         }
 
@@ -95,24 +120,26 @@ export class GpayRpcListenerService implements OnModuleInit, OnModuleDestroy {
             note: txn.note || null,
           };
 
-          await this.bufferToRedis(providerId, normalizedTxn);
+          const isNew = await this.bufferToRedis(providerId, normalizedTxn);
 
-          // Enqueue BullMQ reconciliation event with SHA-256 job ID
-          await this.eventProducer.producePaymentEvent({
-            providerId,
-            merchantId,
-            transaction: {
-              txnId: normalizedTxn.txnId,
-              utr: normalizedTxn.utr,
-              timestamp: normalizedTxn.timestamp.toISOString(),
-              amount: normalizedTxn.amount,
-              customerName: normalizedTxn.customerName,
-              vpa: normalizedTxn.customerVpa,
-              status: normalizedTxn.status,
-              note: normalizedTxn.note,
-            },
-            source: isRPtkab ? 'RPtkab' : 'yuZqtb',
-          });
+          if (isNew) {
+            // Enqueue BullMQ reconciliation event with SHA-256 job ID
+            await this.eventProducer.producePaymentEvent({
+              providerId,
+              merchantId,
+              transaction: {
+                txnId: normalizedTxn.txnId,
+                utr: normalizedTxn.utr,
+                timestamp: normalizedTxn.timestamp.toISOString(),
+                amount: normalizedTxn.amount,
+                customerName: normalizedTxn.customerName,
+                vpa: normalizedTxn.customerVpa,
+                status: normalizedTxn.status,
+                note: normalizedTxn.note,
+              },
+              source: isRPtkab ? 'RPtkab' : 'yuZqtb',
+            });
+          }
         }
       } catch (error: any) {
         this.logger.debug(
@@ -125,22 +152,25 @@ export class GpayRpcListenerService implements OnModuleInit, OnModuleDestroy {
   private async bufferToRedis(
     providerId: string,
     txn: GpayParsedTransaction,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const client = this.redisService.getClient();
       const key = `gpay:buffer:${providerId}`;
       const payload = JSON.stringify(txn);
-      await client.eval(
+      const result = await client.eval(
         this.appendScript,
         1,
         key,
+        txn.txnId,
         payload,
         String(this.redisTtlSeconds),
       );
+      return result === 1;
     } catch (e: any) {
       this.logger.warn(
         `Failed to buffer RPC transaction to Redis for ${providerId}: ${e.message}`,
       );
+      return false;
     }
   }
 }

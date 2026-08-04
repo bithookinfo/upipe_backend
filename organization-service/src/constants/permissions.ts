@@ -58,7 +58,20 @@ export enum Permission {
     WEBHOOK_DELETE = 'webhook:delete',
 
     AUDIT_VIEW = 'audit:view',
-    AUDIT_EXPORT = 'audit:export'
+    AUDIT_EXPORT = 'audit:export',
+
+    CMS_VIEW = 'cms:view',
+    CMS_CREATE = 'cms:create',
+    CMS_UPDATE = 'cms:update',
+    CMS_DELETE = 'cms:delete',
+    CMS_LANDING_MANAGE = 'cms:landing:manage',
+    CMS_DYNAMIC_PAGES_MANAGE = 'cms:dynamic_pages:manage',
+    CMS_BLOGS_MANAGE = 'cms:blogs:manage',
+    CMS_NAVIGATION_MANAGE = 'cms:navigation:manage',
+    CMS_MEDIA_MANAGE = 'cms:media:manage',
+    CMS_SEO_MANAGE = 'cms:seo:manage',
+    CMS_ROOT_FILES_MANAGE = 'cms:root_files:manage',
+    CMS_BRAND_ASSETS_MANAGE = 'cms:brand_assets:manage'
 }
 
 export const DEFAULT_ROLES = {
@@ -114,7 +127,20 @@ export const DEFAULT_ROLES = {
             Permission.WEBHOOK_CREATE,
             Permission.WEBHOOK_UPDATE,
 
-            Permission.AUDIT_VIEW
+            Permission.AUDIT_VIEW,
+            
+            Permission.CMS_VIEW,
+            Permission.CMS_CREATE,
+            Permission.CMS_UPDATE,
+            Permission.CMS_DELETE,
+            Permission.CMS_LANDING_MANAGE,
+            Permission.CMS_DYNAMIC_PAGES_MANAGE,
+            Permission.CMS_BLOGS_MANAGE,
+            Permission.CMS_NAVIGATION_MANAGE,
+            Permission.CMS_MEDIA_MANAGE,
+            Permission.CMS_SEO_MANAGE,
+            Permission.CMS_ROOT_FILES_MANAGE,
+            Permission.CMS_BRAND_ASSETS_MANAGE
         ],
         isDefault: true
     },
@@ -308,6 +334,23 @@ export const PERMISSION_CATEGORIES = {
             Permission.AUDIT_VIEW,
             Permission.AUDIT_EXPORT
         ]
+    },
+    CMS: {
+        label: 'CMS & Content',
+        permissions: [
+            Permission.CMS_VIEW,
+            Permission.CMS_CREATE,
+            Permission.CMS_UPDATE,
+            Permission.CMS_DELETE,
+            Permission.CMS_LANDING_MANAGE,
+            Permission.CMS_DYNAMIC_PAGES_MANAGE,
+            Permission.CMS_BLOGS_MANAGE,
+            Permission.CMS_NAVIGATION_MANAGE,
+            Permission.CMS_MEDIA_MANAGE,
+            Permission.CMS_SEO_MANAGE,
+            Permission.CMS_ROOT_FILES_MANAGE,
+            Permission.CMS_BRAND_ASSETS_MANAGE
+        ]
     }
 };
 
@@ -317,7 +360,8 @@ export function isCriticalPermission(permission: Permission): boolean {
         Permission.USER_DELETE,
         Permission.ROLE_DELETE,
         Permission.SUBSCRIPTION_CANCEL,
-        Permission.API_KEY_REVOKE
+        Permission.API_KEY_REVOKE,
+        Permission.CMS_DELETE
     ];
     return criticalPermissions.includes(permission);
 }
@@ -341,6 +385,18 @@ export function getPermissionLabel(permission: Permission): string {
         [Permission.USER_INVITE]: 'Invite Users',
         [Permission.MERCHANT_VIEW]: 'View Merchants',
         [Permission.MERCHANT_CREATE]: 'Create Merchants',
+        [Permission.CMS_VIEW]: 'View CMS Content',
+        [Permission.CMS_CREATE]: 'Create CMS Content',
+        [Permission.CMS_UPDATE]: 'Update CMS Content',
+        [Permission.CMS_DELETE]: 'Delete CMS Content',
+        [Permission.CMS_LANDING_MANAGE]: 'Manage Landing Page',
+        [Permission.CMS_DYNAMIC_PAGES_MANAGE]: 'Manage Dynamic Pages',
+        [Permission.CMS_BLOGS_MANAGE]: 'Manage Blogs',
+        [Permission.CMS_NAVIGATION_MANAGE]: 'Manage Navigation',
+        [Permission.CMS_MEDIA_MANAGE]: 'Manage Media Library',
+        [Permission.CMS_SEO_MANAGE]: 'Manage Global SEO',
+        [Permission.CMS_ROOT_FILES_MANAGE]: 'Manage Root Files',
+        [Permission.CMS_BRAND_ASSETS_MANAGE]: 'Manage Brand Assets',
     };
     return labels[permission] || permission;
 }

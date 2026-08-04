@@ -34,7 +34,9 @@ export class GpayEncryptionService {
   decrypt(payload: string): string {
     const parts = payload.split(':');
     if (parts.length !== 3) {
-      throw new Error('Invalid encrypted payload format. Expected iv:authTag:ciphertext');
+      throw new Error(
+        'Invalid encrypted payload format. Expected iv:authTag:ciphertext',
+      );
     }
 
     const [ivHex, authTagHex, encryptedHex] = parts;

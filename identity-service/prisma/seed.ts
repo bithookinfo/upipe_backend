@@ -67,6 +67,20 @@ const PERMISSIONS = [
   // Audit & Logs
   { code: 'audit:view', name: 'View Audit Logs', category: 'AUDIT', description: 'View audit trail' },
   { code: 'audit:export', name: 'Export Audit Logs', category: 'AUDIT', description: 'Export audit logs' },
+
+  // CMS
+  { code: 'cms:view', name: 'View CMS Dashboard', category: 'CMS', description: 'View CMS Dashboard' },
+  { code: 'cms:create', name: 'Create CMS Content', category: 'CMS', description: 'Create new CMS content' },
+  { code: 'cms:update', name: 'Update CMS Content', category: 'CMS', description: 'Update CMS content' },
+  { code: 'cms:delete', name: 'Delete CMS Content', category: 'CMS', description: 'Delete CMS content' },
+  { code: 'cms:landing:manage', name: 'Manage Landing Page', category: 'CMS', description: 'Manage Landing Page' },
+  { code: 'cms:dynamic_pages:manage', name: 'Manage Dynamic Pages', category: 'CMS', description: 'Manage Dynamic Pages' },
+  { code: 'cms:blogs:manage', name: 'Manage Blogs', category: 'CMS', description: 'Manage Blogs' },
+  { code: 'cms:navigation:manage', name: 'Manage Navigation', category: 'CMS', description: 'Manage Navigation' },
+  { code: 'cms:media:manage', name: 'Manage Media Library', category: 'CMS', description: 'Manage Media Library' },
+  { code: 'cms:seo:manage', name: 'Manage Global SEO', category: 'CMS', description: 'Manage Global SEO' },
+  { code: 'cms:root_files:manage', name: 'Manage Root Files', category: 'CMS', description: 'Manage Root Files' },
+  { code: 'cms:brand_assets:manage', name: 'Manage Brand Assets', category: 'CMS', description: 'Manage Brand Assets' },
 ];
 
 // Define default roles

@@ -12,13 +12,22 @@ import {
 } from '@nestjs/common';
 import { GpayService } from './gpay.service';
 import { GpayOrchestratorService } from './gpay-orchestrator.service';
+import { BrowserPoolService } from './browser-pool.service';
 import { InternalAuthGuard } from '../../common/guards/internal-auth.guard';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
+import { GPAY_PAYMENT_EVENTS_QUEUE } from './queue/gpay-queue.constants';
+
+import { GpayOnboardingService } from './gpay-onboarding.service';
 
 @Controller('gateway')
 export class GpayGatewayController {
   private readonly logger = new Logger(GpayGatewayController.name);
 
-  constructor(private readonly gpayService: GpayService) {}
+  constructor(
+    private readonly gpayService: GpayService,
+    private readonly gpayOnboardingService: GpayOnboardingService,
+  ) {}
 
   @Post(':providerId/connect-gpay')
   async connectGPay(
@@ -63,7 +72,7 @@ export class GpayGatewayController {
 
     const merchantId = body.merchantId || `temp-${Date.now()}`;
 
-    return this.gpayService.connectGPay(merchantId, {
+    return this.gpayOnboardingService.connectGPay(merchantId, {
       email,
       password: body.password,
       organizationId: body.organizationId,
@@ -93,12 +102,16 @@ export class GpayGatewayController {
     return this.gpayService.finalizeGPayConnection(body.merchantId, body);
   }
 
-  @Patch(':providerId/update-gpay-upi')
+  @Post(':providerId/update-gpay-upi')
   async updateUpi(
     @Param('providerId') providerId: string,
     @Body() body: { upiId: string; merchantId?: string },
   ) {
-    return { success: true, message: 'UPI ID updated via gpay-service' };
+    return this.gpayService.updateGpayUpi(
+      providerId,
+      body.upiId,
+      body.merchantId,
+    );
   }
 }
 
@@ -153,7 +166,82 @@ export class GpayController {
 export class InternalGpayController {
   private readonly logger = new Logger(InternalGpayController.name);
 
-  constructor(private readonly orchestrator: GpayOrchestratorService) {}
+  constructor(
+    private readonly orchestrator: GpayOrchestratorService,
+    private readonly browserPoolService: BrowserPoolService,
+    @InjectQueue(GPAY_PAYMENT_EVENTS_QUEUE)
+    private readonly paymentEventsQueue: Queue,
+  ) {}
+
+  @Get('queue-metrics')
+  async getQueueMetrics() {
+    const [waiting, active, completed, failed, delayed] = await Promise.all([
+      this.paymentEventsQueue.getWaitingCount(),
+      this.paymentEventsQueue.getActiveCount(),
+      this.paymentEventsQueue.getCompletedCount(),
+      this.paymentEventsQueue.getFailedCount(),
+      this.paymentEventsQueue.getDelayedCount(),
+    ]);
+    return {
+      queue: GPAY_PAYMENT_EVENTS_QUEUE,
+      waiting,
+      active,
+      completed,
+      failed,
+      delayed,
+    };
+  }
+
+  @Get('metrics')
+  getOperationalMetrics() {
+    const browsers: any[] =
+      (this.browserPoolService as any).sharedBrowsers || [];
+    const contexts: Map<string, any> =
+      (this.browserPoolService as any).activeContexts || new Map();
+    const memory = process.memoryUsage();
+
+    let activeSharedContexts = 0;
+    let activePersistentContexts = 0;
+
+    contexts.forEach((ctx: any) => {
+      if (ctx.isPersistent) {
+        activePersistentContexts++;
+      } else {
+        activeSharedContexts++;
+      }
+    });
+
+    const maxSharedBrowsers =
+      Number((this.browserPoolService as any).maxBrowsersPerInstance) || 3;
+    const maxContextsPerBrowser =
+      Number((this.browserPoolService as any).maxContextsPerBrowser) || 5;
+    const maxPersistentProfiles =
+      Number(
+        (this.browserPoolService as any).maxPersistentProfilesPerInstance,
+      ) || 3;
+
+    return {
+      activeSharedBrowsers: browsers.length,
+      activeSharedContexts,
+      activePages: contexts.size,
+      activePersistentContexts,
+      activeProviderSessions: contexts.size,
+      browserRecycleCount:
+        (this.browserPoolService as any).browserRecycleCount || 0,
+      capacityRejectionCount:
+        (this.browserPoolService as any).capacityRejectionCount || 0,
+      capacity: {
+        maxSharedBrowsers,
+        maxContextsPerBrowser,
+        maxPersistentProfiles,
+      },
+      memory: {
+        rssMB: Math.round(memory.rss / 1024 / 1024),
+        heapTotalMB: Math.round(memory.heapTotal / 1024 / 1024),
+        heapUsedMB: Math.round(memory.heapUsed / 1024 / 1024),
+      },
+    };
+  }
 
   @Post('providers/:providerId/activate')
   async activateProvider(

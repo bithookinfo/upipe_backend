@@ -1,4 +1,4 @@
-import { validate } from './environment.validation';
+import { validate } from '../../../../src/common/config/environment.validation';
 
 describe('EnvironmentValidation', () => {
   it('should validate and return default values for a valid configuration', () => {

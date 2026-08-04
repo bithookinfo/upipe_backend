@@ -580,6 +580,7 @@ export class GatewayController {
       recoveryPhoneNumber?: string;
       googleVerificationCode?: string;
       isSuperAdmin?: boolean;
+      gpayRuntime?: 'LEGACY' | 'NEW';
     },
     @Req() req: any,
   ) {
@@ -610,6 +611,7 @@ export class GatewayController {
       recoveryPhoneNumber: body.recoveryPhoneNumber,
       googleVerificationCode: body.googleVerificationCode,
       isSuperAdmin,
+      gpayRuntime: body.gpayRuntime,
     });
   }
 
@@ -638,6 +640,7 @@ export class GatewayController {
       upiId: string;
       organizationId: string;
       email?: string;
+      gpayRuntime?: string;
     },
   ) {
     if (providerId.toLowerCase() !== "gpay") {

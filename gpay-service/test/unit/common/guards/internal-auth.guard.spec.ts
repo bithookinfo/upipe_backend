@@ -1,6 +1,6 @@
 import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InternalAuthGuard } from './internal-auth.guard';
+import { InternalAuthGuard } from '../../../../src/common/guards/internal-auth.guard';
 
 describe('InternalAuthGuard', () => {
   let guard: InternalAuthGuard;

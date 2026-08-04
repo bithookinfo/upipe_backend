@@ -1,4 +1,4 @@
-import { GpayEncryptionService } from './gpay-encryption.service';
+import { GpayEncryptionService } from '../../../../src/common/security/gpay-encryption.service';
 import { ConfigService } from '@nestjs/config';
 
 describe('GpayEncryptionService', () => {

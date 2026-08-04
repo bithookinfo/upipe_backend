@@ -4,14 +4,17 @@ import { Job } from 'bullmq';
 import { GpayReconciliationService } from '../gpay-reconciliation.service';
 import { GpayPaymentEventPayload } from './gpay-payment-event.producer';
 import { GpayParsedTransaction } from '../gpay-rpc-parser.service';
+import { GPAY_PAYMENT_EVENTS_QUEUE } from './gpay-queue.constants';
 
-@Processor('gpay-payment-events', {
+@Processor(GPAY_PAYMENT_EVENTS_QUEUE, {
   concurrency: 5,
 })
 export class GpayReconciliationProcessor extends WorkerHost {
   private readonly logger = new Logger(GpayReconciliationProcessor.name);
 
-  constructor(private readonly reconciliationService: GpayReconciliationService) {
+  constructor(
+    private readonly reconciliationService: GpayReconciliationService,
+  ) {
     super();
   }
 

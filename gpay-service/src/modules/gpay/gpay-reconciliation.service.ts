@@ -38,9 +38,7 @@ export class GpayReconciliationService {
   constructor(
     private readonly merchantClient: MerchantServiceClient,
     private readonly paymentClient: PaymentServiceClient,
-    @Optional()
-    @Inject(forwardRef(() => GpaySessionService))
-    private readonly sessionService?: GpaySessionService,
+    @Optional() private readonly sessionService?: GpaySessionService,
   ) {}
 
   private async checkLeaseBeforeWrite(providerId: string): Promise<void> {
@@ -77,39 +75,31 @@ export class GpayReconciliationService {
       const matchedOrder = this.matchOrder(pendingOrders, txn);
 
       if (existingTxn) {
-        if (
-          existingTxn.status === 'SUCCESS' ||
-          (existingTxn as any).order?.status === 'COMPLETED' ||
-          (existingTxn as any).order?.status === 'SUCCESS'
-        ) {
+        const orderStatus =
+          existingTxn.order?.status ||
+          (matchedOrder ? matchedOrder.status : null);
+        const isOrderCompleted =
+          orderStatus === 'COMPLETED' || orderStatus === 'SUCCESS';
+
+        if (isOrderCompleted) {
           return {
             success: true,
             status: 'ALREADY_COMPLETED',
             transactionId: existingTxn.id,
-            orderId: (existingTxn as any).orderId,
+            orderId: existingTxn.orderId || matchedOrder?.id,
           };
         }
 
         // Existing transaction + PENDING order: retry only order completion
-        if ((existingTxn as any).orderId) {
+        const targetOrderId = existingTxn.orderId || matchedOrder?.id;
+        if (targetOrderId) {
           await this.checkLeaseBeforeWrite(providerId);
-          await this.completeOrder((existingTxn as any).orderId);
+          await this.completeOrder(targetOrderId);
           return {
             success: true,
             status: 'SUCCESS',
             transactionId: existingTxn.id,
-            orderId: (existingTxn as any).orderId,
-          };
-        }
-
-        if (matchedOrder) {
-          await this.checkLeaseBeforeWrite(providerId);
-          await this.completeOrder((matchedOrder as any).id);
-          return {
-            success: true,
-            status: 'SUCCESS',
-            transactionId: existingTxn.id,
-            orderId: (matchedOrder as any).id,
+            orderId: targetOrderId,
           };
         }
 
@@ -132,10 +122,10 @@ export class GpayReconciliationService {
       // Step B: Complete order if matched
       if (matchedOrder) {
         await this.checkLeaseBeforeWrite(providerId);
-        await this.completeOrder((matchedOrder as any).id);
+        await this.completeOrder(matchedOrder.id);
         this.logger.log(
           `[2-Step Write] Reconciled order ${
-            (matchedOrder as any).id
+            matchedOrder.id
           } with GPay txn ${txn.txnId} (amountMinor: ${toMinorUnits(
             txn.amount,
           )})`,
@@ -151,7 +141,7 @@ export class GpayReconciliationService {
       return {
         success: true,
         status: 'SUCCESS',
-        orderId: matchedOrder ? (matchedOrder as any).id : undefined,
+        orderId: matchedOrder ? matchedOrder.id : undefined,
         transactionId: createdTxnId,
       };
     } catch (error: any) {
@@ -169,11 +159,17 @@ export class GpayReconciliationService {
     merchantIdOrTxns: any,
     maybeTxns?: GpayParsedTransaction[],
   ) {
-    const providerId = typeof providerOrId === 'string' ? providerOrId : providerOrId?.id || '';
-    const merchantId = typeof providerOrId === 'string' ? merchantIdOrTxns : providerOrId?.merchantId || '';
-    const transactions: GpayParsedTransaction[] = Array.isArray(merchantIdOrTxns)
+    const providerId =
+      typeof providerOrId === 'string' ? providerOrId : providerOrId?.id || '';
+    const merchantId =
+      typeof providerOrId === 'string'
+        ? merchantIdOrTxns
+        : providerOrId?.merchantId || '';
+    const transactions: GpayParsedTransaction[] = Array.isArray(
+      merchantIdOrTxns,
+    )
       ? merchantIdOrTxns
-      : (maybeTxns || []);
+      : maybeTxns || [];
 
     let saved = 0;
     let duplicates = 0;
@@ -183,7 +179,11 @@ export class GpayReconciliationService {
       const res = await this.reconcileTransaction(providerId, merchantId, txn);
       results.push(res);
       if (res.success && res.status === 'SUCCESS') saved++;
-      else if (res.status === 'ALREADY_COMPLETED' || res.status === 'TXN_EXISTS_UNMATCHED') duplicates++;
+      else if (
+        res.status === 'ALREADY_COMPLETED' ||
+        res.status === 'TXN_EXISTS_UNMATCHED'
+      )
+        duplicates++;
       else errors++;
     }
     return { saved, duplicates, errors, results };

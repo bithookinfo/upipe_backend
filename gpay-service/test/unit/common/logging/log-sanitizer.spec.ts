@@ -1,4 +1,4 @@
-import { sanitizeLog } from './log-sanitizer';
+import { sanitizeLog } from '../../../../src/common/logging/log-sanitizer';
 
 describe('LogSanitizer', () => {
   it('should redact sensitive object properties by key name', () => {

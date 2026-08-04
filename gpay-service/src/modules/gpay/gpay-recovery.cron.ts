@@ -9,6 +9,7 @@ import { BrowserPoolService } from './browser-pool.service';
 import { MerchantServiceClient } from '../../clients/merchant-service.client';
 import { PlaywrightSessionManager } from './playwright-session-manager.service';
 import { GpayEncryptionService } from '../../common/security/gpay-encryption.service';
+import * as crypto from 'crypto';
 
 interface PendingActivationCandidate {
   merchantId: string;
@@ -24,6 +25,7 @@ export class GpayRecoveryCron {
   private readonly internalToken: string;
   private readonly maxAgeMs: number;
   private readonly enabled: boolean;
+  private readonly instanceId = crypto.randomUUID();
 
   constructor(
     private readonly configService: ConfigService,
@@ -45,83 +47,35 @@ export class GpayRecoveryCron {
       this.configService.get('GPAY_RECOVERY_CRON_ENABLED') !== 'false';
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron('*/15 * * * * *')
   async recoverSessions(): Promise<void> {
     if (this.configService.get('NEW_GPAY_WORKERS_ENABLED') === 'false') {
       this.logger.debug('NEW_GPAY_WORKERS_ENABLED is false, skipping recovery');
       return;
     }
 
-    try {
-      const activeProviders = await this.merchantClient.getActiveProviders();
-      for (const provider of activeProviders) {
-        if ((provider.metadata as any)?.gpayRuntime === 'NEW') {
-          const session = this.sessionManager.getActiveSession(provider.id);
-          const isClosed = session?.page ? (session.page as any).isClosed() : true;
-
-          if (!session || isClosed) {
-            this.logger.warn(
-              `Session missing or closed for provider ${provider.id}. Starting recovery...`,
-            );
-            await this.sessionManager.closeSession(provider.id);
-            let decryptedState: any = undefined;
-            if (provider.sessionState) {
-              try {
-                decryptedState = this.encryptionService.decryptSessionState(
-                  provider.sessionState,
-                );
-              } catch (e: any) {
-                this.logger.error(
-                  `Failed to decrypt session state for ${provider.id}: ${e.message}`,
-                );
-              }
-            }
-
-            const newSession = await this.sessionManager.launchSession(
-              provider,
-              decryptedState,
-            );
-            const businessId = (provider.credentials as any)?.businessId;
-            if (newSession?.page && businessId) {
-              await newSession.page
-                .goto(`https://pay.google.com/g4b/transactions/${businessId}`, {
-                  waitUntil: 'domcontentloaded',
-                  timeout: 30000,
-                })
-                .catch(() => null);
-            }
-            await this.sessionManager.autoHealInvalidTransactionsUrl(
-              provider.id,
-              newSession,
-              businessId,
-            );
-          }
-        }
-      }
-    } catch (error: any) {
-      this.logger.error(`Error during recoverSessions: ${error.message}`);
+    if (!this.redisService || !this.httpService || !this.enabled) {
+      return;
     }
 
-    // Secondary recovery: check pending activations if Redis & HttpService are available
-    if (this.redisService && this.httpService && this.enabled) {
-      await this.runPendingActivationRecovery();
-    }
+    await this.runPendingActivationRecovery();
   }
 
   private async runPendingActivationRecovery(): Promise<void> {
-    if (!this.redisService || !this.httpService) return;
     const lockKey = 'gpay:recovery:lock';
+    const runId = crypto.randomUUID();
+    const lockValue = `${this.instanceId}:${runId}`;
+    let lockAcquired = false;
+
     try {
-      const client = this.redisService.getClient();
-      const acquired = await client.set(lockKey, 'locked', 'EX', 15, 'NX');
+      const client = this.redisService!.getClient();
+      // Acquire lock with 60 seconds TTL
+      const acquired = await client.set(lockKey, lockValue, 'EX', 60, 'NX');
       if (acquired !== 'OK') {
         return; // Another instance is running recovery
       }
-    } catch {
-      return; // Fail safe if Redis is down
-    }
+      lockAcquired = true;
 
-    try {
       const candidates = await this.fetchPendingActivations();
       if (candidates.length === 0) return;
 
@@ -138,10 +92,31 @@ export class GpayRecoveryCron {
       }
     } catch (error: any) {
       this.logger.warn(`Error during GPay recovery cycle: ${error.message}`);
+    } finally {
+      if (lockAcquired) {
+        try {
+          const client = this.redisService!.getClient();
+          // Release verifies ownership atomically using a Lua script
+          const luaScript = `
+            if redis.call("get",KEYS[1]) == ARGV[1] then
+                return redis.call("del",KEYS[1])
+            else
+                return 0
+            end
+          `;
+          await client.eval(luaScript, 1, lockKey, lockValue);
+        } catch (e: any) {
+          this.logger.warn(
+            `Failed to release recovery lock atomically: ${e.message}`,
+          );
+        }
+      }
     }
   }
 
-  private async fetchPendingActivations(): Promise<PendingActivationCandidate[]> {
+  private async fetchPendingActivations(): Promise<
+    PendingActivationCandidate[]
+  > {
     if (!this.httpService) return [];
     try {
       const res = await firstValueFrom(
@@ -150,7 +125,7 @@ export class GpayRecoveryCron {
           { headers: { 'x-internal-token': this.internalToken } },
         ),
       );
-      return (res.data as any)?.candidates || [];
+      return res.data?.candidates || [];
     } catch (error: any) {
       this.logger.warn(
         `Failed to query GET /internal/gpay/pending-activations: ${error.message}`,
@@ -159,13 +134,37 @@ export class GpayRecoveryCron {
     }
   }
 
-  private async processCandidate(candidate: PendingActivationCandidate): Promise<void> {
-    const { providerId, merchantId } = candidate;
+  private async processCandidate(
+    candidate: PendingActivationCandidate,
+  ): Promise<void> {
+    const { providerId, merchantId, status } = candidate;
+
+    // Recovery backoff for EXPIRED providers
+    if (status === 'EXPIRED') {
+      const client = this.redisService?.getClient();
+      if (client) {
+        const backoffKey = `gpay:recovery:backoff:${providerId}`;
+        const attempts = await client.incr(backoffKey);
+        if (attempts === 1) {
+          await client.expire(backoffKey, 300); // 5 minutes base backoff
+        } else if (attempts > 3) {
+          this.logger.warn(
+            `Provider ${providerId} is EXPIRED and exceeded recovery attempts. Skipping.`,
+          );
+          return;
+        }
+      }
+    }
+
     try {
       if (!this.orchestrator) return;
-      const res = await this.orchestrator.activateProvider(providerId, merchantId, {
-        requiresPersistentProfile: false,
-      });
+      const res = await this.orchestrator.activateProvider(
+        providerId,
+        merchantId,
+        {
+          requiresPersistentProfile: false,
+        },
+      );
 
       if (res.success) {
         this.logger.log(

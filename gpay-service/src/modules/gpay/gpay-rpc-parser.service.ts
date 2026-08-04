@@ -118,7 +118,8 @@ export class GpayRpcParserService {
    */
   parseTxnRecord(record: any): GpayParsedTransaction | null {
     if (!record || !Array.isArray(record)) return null;
-    const r = Array.isArray(record[0]) && record[0].length > 3 ? record[0] : record;
+    const r =
+      Array.isArray(record[0]) && record[0].length > 3 ? record[0] : record;
     if (!r[0]) return null;
 
     const txnId = String(r[0]);
@@ -127,7 +128,9 @@ export class GpayRpcParserService {
     const timestampSeconds = Array.isArray(r[2]) ? Number(r[2][0]) : null;
     const timestampNanos = Array.isArray(r[2]) ? Number(r[2][1] || 0) : 0;
     const timestamp = timestampSeconds
-      ? new Date(timestampSeconds * 1000 + Math.floor(timestampNanos / 1_000_000))
+      ? new Date(
+          timestampSeconds * 1000 + Math.floor(timestampNanos / 1_000_000),
+        )
       : new Date();
 
     const amount = Array.isArray(r[3])

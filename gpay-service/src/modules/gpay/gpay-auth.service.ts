@@ -45,7 +45,9 @@ export class GpayAuthService {
     try {
       await this.redisService.getClient().set(key, state, 'EX', ttlSeconds);
     } catch (e: any) {
-      this.logger.warn(`Could not set Redis session state for ${providerId}: ${e.message}`);
+      this.logger.warn(
+        `Could not set Redis session state for ${providerId}: ${e.message}`,
+      );
     }
   }
 
@@ -57,7 +59,9 @@ export class GpayAuthService {
       const val = await this.redisService.getClient().get(key);
       return (val as any) || null;
     } catch (e: any) {
-      this.logger.warn(`Could not read Redis session state for ${providerId}: ${e.message}`);
+      this.logger.warn(
+        `Could not read Redis session state for ${providerId}: ${e.message}`,
+      );
       return null;
     }
   }
@@ -116,7 +120,11 @@ export class GpayAuthService {
     email: string,
     password?: string,
     otp?: string,
-  ): Promise<{ success: boolean; challengeRequired?: boolean; reason?: string }> {
+  ): Promise<{
+    success: boolean;
+    challengeRequired?: boolean;
+    reason?: string;
+  }> {
     try {
       if (email) {
         await page.goto('https://accounts.google.com/signin/v2/identifier', {
@@ -142,7 +150,9 @@ export class GpayAuthService {
       }
 
       if (otp) {
-        const otpInput = page.locator('input[type="tel"], input[name="totpPin"], input[id*="idv"]');
+        const otpInput = page.locator(
+          'input[type="tel"], input[name="totpPin"], input[id*="idv"]',
+        );
         if (await otpInput.isVisible({ timeout: 5000 })) {
           await otpInput.fill(otp);
           await page.keyboard.press('Enter');
@@ -151,8 +161,16 @@ export class GpayAuthService {
       }
 
       const url = page.url();
-      if (url.includes('challenge') || url.includes('idv') || url.includes('signin/v2/challenge')) {
-        return { success: false, challengeRequired: true, reason: 'GOOGLE_CHALLENGE_DETECTED' };
+      if (
+        url.includes('challenge') ||
+        url.includes('idv') ||
+        url.includes('signin/v2/challenge')
+      ) {
+        return {
+          success: false,
+          challengeRequired: true,
+          reason: 'GOOGLE_CHALLENGE_DETECTED',
+        };
       }
 
       return { success: true };

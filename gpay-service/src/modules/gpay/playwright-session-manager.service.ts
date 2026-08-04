@@ -66,7 +66,14 @@ export class PlaywrightSessionManager implements OnModuleDestroy {
     return this.getSession(providerId);
   }
 
-  async initOrGetSession(provider: GpayProviderData): Promise<GpayActiveSession> {
+  async initOrGetSession(
+    provider: GpayProviderData,
+    options?: {
+      requiresPersistentProfile?: boolean;
+      profilePath?: string;
+      skipNavigation?: boolean;
+    },
+  ): Promise<GpayActiveSession> {
     const active = this.browserPool.getActiveContext(provider.id);
     if (active) {
       return {
@@ -84,17 +91,26 @@ export class PlaywrightSessionManager implements OnModuleDestroy {
       provider.id,
       provider.merchantId,
       {
-        requiresPersistentProfile: Boolean((provider as any).metadata?.requiresPersistentProfile),
+        requiresPersistentProfile: Boolean(
+          options?.requiresPersistentProfile ??
+          (provider as any).metadata?.requiresPersistentProfile,
+        ),
+        profilePath: options?.profilePath,
+        skipNavigation: options?.skipNavigation,
       },
     );
 
     if (!res.success) {
-      throw new Error(`Failed to initialize session for provider ${provider.id}: ${res.message}`);
+      throw new Error(
+        `Failed to initialize session for provider ${provider.id}: ${res.message}`,
+      );
     }
 
     const newActive = this.browserPool.getActiveContext(provider.id);
     if (!newActive) {
-      throw new Error(`Context not found after activation for provider ${provider.id}`);
+      throw new Error(
+        `Context not found after activation for provider ${provider.id}`,
+      );
     }
 
     return {
@@ -108,19 +124,38 @@ export class PlaywrightSessionManager implements OnModuleDestroy {
     };
   }
 
-  async launchSession(provider: GpayProviderData, storageStateJson?: any): Promise<GpayActiveSession> {
-    return this.initOrGetSession(provider);
+  async launchSession(
+    provider: GpayProviderData,
+    storageStateJson?: any,
+    options?: {
+      requiresPersistentProfile?: boolean;
+      profilePath?: string;
+      skipNavigation?: boolean;
+    },
+  ): Promise<GpayActiveSession> {
+    return this.initOrGetSession(provider, options);
   }
 
   async closeSession(providerId: string): Promise<void> {
     await this.orchestrator.deactivateProvider(providerId, '');
   }
 
-  async signInWithGoogle(provider: GpayProviderData, password?: string, otp?: string): Promise<void> {
+  async signInWithGoogle(
+    provider: GpayProviderData,
+    password?: string,
+    otp?: string,
+  ): Promise<void> {
     const active = await this.initOrGetSession(provider);
-    const res = await this.authService.performSignIn(active.page, provider.email || '', password, otp);
+    const res = await this.authService.performSignIn(
+      active.page,
+      provider.email || '',
+      password,
+      otp,
+    );
     if (!res.success) {
-      throw new Error(`Google Sign-In failed for ${provider.id}: ${res.reason}`);
+      throw new Error(
+        `Google Sign-In failed for ${provider.id}: ${res.reason}`,
+      );
     }
   }
 
@@ -133,13 +168,20 @@ export class PlaywrightSessionManager implements OnModuleDestroy {
     if (active) {
       const state = await active.context.storageState().catch(() => null);
       if (state) {
-        await this.sessionService.persistStorageState(provider.id, provider.merchantId, state);
+        await this.sessionService.persistStorageState(
+          provider.id,
+          provider.merchantId,
+          state,
+        );
       }
     }
   }
 
   async snapshotSessionState(providerId: string): Promise<void> {
-    await this.saveSession({ id: providerId, merchantId: '' } as GpayProviderData);
+    await this.saveSession({
+      id: providerId,
+      merchantId: '',
+    } as GpayProviderData);
   }
 
   async autoHealInvalidTransactionsUrl(

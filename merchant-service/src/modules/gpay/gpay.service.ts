@@ -353,6 +353,7 @@ export class GpayService implements OnModuleDestroy {
       recoveryPhoneNumber?: string;
       googleVerificationCode?: string;
       isSuperAdmin?: boolean;
+      gpayRuntime?: 'LEGACY' | 'NEW';
     },
   ) {
     let browser: any = null;
@@ -391,6 +392,9 @@ export class GpayService implements OnModuleDestroy {
         const targetRuntime =
           (existingProvider?.metadata as any)?.gpayRuntime ||
           (data as any)?.gpayRuntime;
+
+        this.logger.log(`[Coordinator Debug] isNewRuntimeEnabled: ${isNewRuntimeEnabled} (env: ${process.env.GPAY_NEW_RUNTIME_ENABLED}), targetRuntime: ${targetRuntime}, existing: ${(existingProvider?.metadata as any)?.gpayRuntime}, payload: ${(data as any)?.gpayRuntime}`);
+
         if (isNewRuntimeEnabled && targetRuntime === 'NEW') {
           this.logger.log(
             `[Coordinator] GPAY_NEW_RUNTIME_ENABLED is true and runtime is NEW. Forwarding connectGPay to gpay-service...`,
@@ -2188,12 +2192,21 @@ return await this.prisma.merchantProvider.create({
    * Update GPay UPI ID - finds the GPay connection by org + email and updates accountIdentifier.
    */
   async updateGpayUpi(data: {
-        organizationId: string;
-        upiId: string;
-        email?: string;
-      }) {
-        try {
-          this.logger.log(
+    organizationId: string;
+    upiId: string;
+    email?: string;
+    gpayRuntime?: string;
+  }) {
+    try {
+      const isNewRuntimeEnabled = process.env.GPAY_NEW_RUNTIME_ENABLED === 'true';
+      if (isNewRuntimeEnabled && data.gpayRuntime === 'NEW') {
+        return this.forwardToNewGpayService(
+          '/gateway/gpay/update-gpay-upi',
+          data,
+        );
+      }
+
+      this.logger.log(
             `📝 Updating GPay UPI for org: ${data.organizationId}, upiId: ${data.upiId}`,
           );
 
@@ -3208,25 +3221,25 @@ return await this.prisma.merchantProvider.create({
 
 
 
-  private async checkProviderLimit(
-        organizationId: string,
-        providerCode: string,
-      ): Promise<void> {
-        try {
-          const subscriptionServiceUrl =
-            process.env.SUBSCRIPTION_SERVICE_URL;
-          const axios = require("axios");
-          await axios.get(
-            `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/provider-access/${providerCode}`,
-          );
-        } catch (err: any) {
-          if (err?.response?.status === 403) {
-            throw new BadRequestException(
-              err?.response?.data?.message || "Provider limit reached for your plan",
-            );
-          }
-        }
-      }
+  // private async checkProviderLimit(
+  //       organizationId: string,
+  //       providerCode: string,
+  //     ): Promise<void> {
+  //       try {
+  //         const subscriptionServiceUrl =
+  //           process.env.SUBSCRIPTION_SERVICE_URL;
+  //         const axios = require("axios");
+  //         await axios.get(
+  //           `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/provider-access/${providerCode}`,
+  //         );
+  //       } catch (err: any) {
+  //         if (err?.response?.status === 403) {
+  //           throw new BadRequestException(
+  //             err?.response?.data?.message || "Provider limit reached for your plan",
+  //           );
+  //         }
+  //       }
+  //     }
 
   private async safeTakeScreenshot(page: any): Promise<string | undefined> {
         try {
@@ -3247,9 +3260,14 @@ return await this.prisma.merchantProvider.create({
     body: any,
   ): Promise<any> {
     const axios = require('axios');
-    const gpayUrl = process.env.GPAY_SERVICE_URL || 'http://localhost:4007';
-    const token = process.env.INTERNAL_TOKEN || 'default-internal-token';
-    const url = `${gpayUrl}${endpoint}`;
+    const gpayUrl = process.env.GPAY_SERVICE_URL;
+    const token = process.env.INTERNAL_TOKEN;
+    if (!token) {
+      throw new Error('INTERNAL_TOKEN is not defined');
+    }
+    const prefix = endpoint.startsWith('/api/v1') ? '' : '/api/v1';
+    const cleanEndpoint = endpoint.startsWith('/') && !endpoint.startsWith('/api/v1') ? endpoint : (endpoint.startsWith('/') ? endpoint.replace('/api/v1', '') : `/${endpoint}`);
+    const url = `${gpayUrl}${prefix}${cleanEndpoint}`;
     this.logger.log(`[Coordinator] Forwarding request to new runtime: ${url}`);
     const res = await axios.post(url, body, {
       headers: {

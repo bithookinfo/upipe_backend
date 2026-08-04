@@ -184,7 +184,13 @@ export class MerchantServiceClient {
     }
   }
 
-  async getProviderByMerchant(merchantId: string): Promise<GpayProviderData | null> {
+  async getProviderByMerchant(
+    merchantId: string,
+  ): Promise<GpayProviderData | null> {
+    if (merchantId.startsWith('temp_') || merchantId.startsWith('temp-')) {
+      return null;
+    }
+
     try {
       return await this.executeGet<GpayProviderData>(
         `/internal/gpay/merchants/${encodeURIComponent(merchantId)}/providers/by-type/GPAY`,
@@ -194,4 +200,3 @@ export class MerchantServiceClient {
     }
   }
 }
-

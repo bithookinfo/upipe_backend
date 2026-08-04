@@ -1,4 +1,4 @@
-import { GpayRpcParserService } from './gpay-rpc-parser.service';
+import { GpayRpcParserService } from '../../../../src/modules/gpay/gpay-rpc-parser.service';
 
 describe('GpayRpcParserService', () => {
   let service: GpayRpcParserService;

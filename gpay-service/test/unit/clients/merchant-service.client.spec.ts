@@ -1,8 +1,7 @@
-/* eslint-disable @typescript-eslint/unbound-method */
 import { InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
-import { MerchantServiceClient } from './merchant-service.client';
+import { MerchantServiceClient } from '../../../src/clients/merchant-service.client';
 
 jest.mock('axios');
 const mockedAxios = axios as jest.Mocked<typeof axios>;

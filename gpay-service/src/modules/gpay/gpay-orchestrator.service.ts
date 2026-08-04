@@ -37,6 +37,7 @@ export class GpayOrchestratorService {
       requiresPersistentProfile?: boolean;
       profilePath?: string;
       force?: boolean;
+      skipNavigation?: boolean;
     },
   ): Promise<{ success: boolean; isPersistent?: boolean; message?: string }> {
     // 1. Verify status policy from merchant-service
@@ -52,9 +53,12 @@ export class GpayOrchestratorService {
     }
 
     // 2. Acquire Redis lease
-    const leaseAcquired = await this.sessionService.acquireProviderLease(providerId);
+    const leaseAcquired =
+      await this.sessionService.acquireProviderLease(providerId);
     if (!leaseAcquired && !options?.force) {
-      this.logger.warn(`Could not acquire Redis lease for provider ${providerId}. Another worker owns it.`);
+      this.logger.warn(
+        `Could not acquire Redis lease for provider ${providerId}. Another worker owns it.`,
+      );
       return {
         success: false,
         message: `Provider ${providerId} is currently owned by another worker instance.`,
@@ -82,22 +86,32 @@ export class GpayOrchestratorService {
         merchantId,
       );
 
-      await activeContext.page.goto(
-        'https://pay.google.com/business/console',
-        { waitUntil: 'domcontentloaded', timeout: 30000 },
-      ).catch((e: any) => {
-        this.logger.warn(`Navigation warning for ${providerId}: ${e.message}`);
-      });
+      if (!options?.skipNavigation) {
+        await activeContext.page
+          .goto('https://pay.google.com/business/console', {
+            waitUntil: 'domcontentloaded',
+            timeout: 30000,
+          })
+          .catch((e: any) => {
+            this.logger.warn(
+              `Navigation warning for ${providerId}: ${e.message}`,
+            );
+          });
+      }
 
       await this.authService.setSessionState(providerId, 'ACTIVE', 900);
 
-      this.logger.log(`Successfully activated provider ${providerId} (persistent: ${activeContext.isPersistent})`);
+      this.logger.log(
+        `Successfully activated provider ${providerId} (persistent: ${activeContext.isPersistent})`,
+      );
       return {
         success: true,
         isPersistent: activeContext.isPersistent,
       };
     } catch (error: any) {
-      this.logger.error(`Error activating provider ${providerId}: ${error.message}`);
+      this.logger.error(
+        `Error activating provider ${providerId}: ${error.message}`,
+      );
       return { success: false, message: error.message };
     }
   }
@@ -105,16 +119,25 @@ export class GpayOrchestratorService {
   /**
    * Deactivates a Google Pay provider context, persisting state and releasing locks.
    */
-  async deactivateProvider(providerId: string, merchantId: string): Promise<void> {
+  async deactivateProvider(
+    providerId: string,
+    merchantId: string,
+  ): Promise<void> {
     const active = this.browserPoolService.getActiveContext(providerId);
     if (active) {
       try {
         const state = await active.context.storageState().catch(() => null);
         if (state) {
-          await this.sessionService.persistStorageState(providerId, merchantId, state);
+          await this.sessionService.persistStorageState(
+            providerId,
+            merchantId,
+            state,
+          );
         }
       } catch (e: any) {
-        this.logger.warn(`Error saving state during deactivation of ${providerId}: ${e.message}`);
+        this.logger.warn(
+          `Error saving state during deactivation of ${providerId}: ${e.message}`,
+        );
       }
     }
 
@@ -126,7 +149,11 @@ export class GpayOrchestratorService {
 
   private async verifyProviderStatusPolicy(
     providerId: string,
-  ): Promise<{ allowed: boolean; status?: string }> {
+  ): Promise<{ allowed: boolean; status: string }> {
+    if (providerId.startsWith('temp_') || providerId.startsWith('temp-')) {
+      return { allowed: true, status: 'ACTIVE' };
+    }
+
     try {
       const res = await firstValueFrom(
         this.httpService.get(
@@ -135,8 +162,7 @@ export class GpayOrchestratorService {
         ),
       );
 
-      const status =
-        (res.data as any)?.provider?.status || (res.data as any)?.status || 'ACTIVE';
+      const status = res.data?.provider?.status || res.data?.status || 'ACTIVE';
 
       // Allowed: ACTIVE, EXPIRED. Never allowed: INACTIVE, SUSPENDED
       if (status === 'INACTIVE' || status === 'SUSPENDED') {
@@ -146,7 +172,9 @@ export class GpayOrchestratorService {
       return { allowed: true, status };
     } catch (error: any) {
       // If endpoint fails or provider not found, allow default check unless explicit error
-      this.logger.warn(`Could not verify status for ${providerId}: ${error.message}`);
+      this.logger.warn(
+        `Could not verify status for ${providerId}: ${error.message}`,
+      );
       return { allowed: true, status: 'ACTIVE' };
     }
   }

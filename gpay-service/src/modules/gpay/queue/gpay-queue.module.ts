@@ -3,8 +3,8 @@ import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { HttpModule } from '@nestjs/axios';
 import { GpayPaymentEventProducer } from './gpay-payment-event.producer';
-import { GpayReconciliationProcessor } from './gpay-reconciliation.processor';
-import { GpayReconciliationService } from '../gpay-reconciliation.service';
+
+import { GPAY_PAYMENT_EVENTS_QUEUE } from './gpay-queue.constants';
 
 @Module({
   imports: [
@@ -29,14 +29,10 @@ import { GpayReconciliationService } from '../gpay-reconciliation.service';
       },
     }),
     BullModule.registerQueue({
-      name: 'gpay-payment-events',
+      name: GPAY_PAYMENT_EVENTS_QUEUE,
     }),
   ],
-  providers: [
-    GpayPaymentEventProducer,
-    GpayReconciliationProcessor,
-    GpayReconciliationService,
-  ],
-  exports: [GpayPaymentEventProducer],
+  providers: [GpayPaymentEventProducer],
+  exports: [GpayPaymentEventProducer, BullModule],
 })
 export class GpayQueueModule {}

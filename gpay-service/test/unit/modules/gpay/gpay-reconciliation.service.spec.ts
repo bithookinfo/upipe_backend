@@ -1,6 +1,6 @@
-import { GpayReconciliationService } from './gpay-reconciliation.service';
-import { PaymentServiceClient } from '../../clients/payment-service.client';
-import { MerchantServiceClient } from '../../clients/merchant-service.client';
+import { GpayReconciliationService } from '../../../../src/modules/gpay/gpay-reconciliation.service';
+import { PaymentServiceClient } from '../../../../src/clients/payment-service.client';
+import { MerchantServiceClient } from '../../../../src/clients/merchant-service.client';
 
 describe('GpayReconciliationService', () => {
   let service: GpayReconciliationService;
@@ -19,6 +19,7 @@ describe('GpayReconciliationService', () => {
   beforeEach(() => {
     paymentClient = {
       syncTransaction: jest.fn(),
+      completeOrder: jest.fn(),
       fetchPendingOrders: jest.fn(),
       findTransactionByExternalId: jest.fn(),
     } as unknown as jest.Mocked<PaymentServiceClient>;
@@ -55,7 +56,9 @@ describe('GpayReconciliationService', () => {
         providerCode: 'GPAY',
       });
 
-      const res = await service.reconcileTransactions(sampleProvider, [gpayTxn]);
+      const res = await service.reconcileTransactions(sampleProvider, [
+        gpayTxn,
+      ]);
 
       expect(res.saved).toBe(1);
       expect(paymentClient.syncTransaction).toHaveBeenCalledTimes(1);
@@ -93,10 +96,13 @@ describe('GpayReconciliationService', () => {
           amount: 200,
           status: 'SUCCESS',
           providerCode: 'GPAY',
-        },
+          order: { status: 'COMPLETED' },
+        } as any,
       ]);
 
-      const res = await service.reconcileTransactions(sampleProvider, [gpayTxn]);
+      const res = await service.reconcileTransactions(sampleProvider, [
+        gpayTxn,
+      ]);
       expect(res.saved).toBe(0);
       expect(paymentClient.syncTransaction).not.toHaveBeenCalled();
     });
@@ -127,7 +133,9 @@ describe('GpayReconciliationService', () => {
 
       await expect(
         serviceWithSession.reconcileTransaction('prov_1', 'merch_1', gpayTxn),
-      ).rejects.toThrow(/Reconciliation write blocked: provider prov_1 lease was lost/);
+      ).rejects.toThrow(
+        /Reconciliation write blocked: provider prov_1 lease was lost/,
+      );
     });
 
     it('should return status SUCCESS when retrying order completion for existing transaction', async () => {
@@ -151,10 +159,14 @@ describe('GpayReconciliationService', () => {
           status: 'PENDING',
           providerCode: 'GPAY',
         },
-      ] as any);
+      ]);
       paymentClient.completeOrder = jest.fn().mockResolvedValue({});
 
-      const res = await service.reconcileTransaction('prov_1', 'merch_1', gpayTxn);
+      const res = await service.reconcileTransaction(
+        'prov_1',
+        'merch_1',
+        gpayTxn,
+      );
       expect(res.status).toBe('SUCCESS');
       expect(paymentClient.completeOrder).toHaveBeenCalledWith('order_retry');
     });

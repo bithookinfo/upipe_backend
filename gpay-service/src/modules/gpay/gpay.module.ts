@@ -18,7 +18,9 @@ import { GpayAuthService } from './gpay-auth.service';
 import { GpaySessionService } from './gpay-session.service';
 import { GpayRpcListenerService } from './gpay-rpc-listener.service';
 import { GpayOrchestratorService } from './gpay-orchestrator.service';
+import { GpayOnboardingService } from './gpay-onboarding.service';
 import { GpayQueueModule } from './queue/gpay-queue.module';
+import { GpayReconciliationProcessor } from './queue/gpay-reconciliation.processor';
 import { RedisModule } from '../../common/redis/redis.module';
 
 @Module({
@@ -38,6 +40,8 @@ import { RedisModule } from '../../common/redis/redis.module';
     GpaySessionService,
     GpayRpcListenerService,
     GpayOrchestratorService,
+    GpayOnboardingService,
+    GpayReconciliationProcessor,
   ],
   exports: [GpayService, GpayOrchestratorService],
 })

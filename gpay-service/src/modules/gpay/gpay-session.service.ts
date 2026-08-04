@@ -81,10 +81,7 @@ export class GpaySessionService implements OnModuleInit, OnModuleDestroy {
       () => this.renewAllLeases(),
       this.leaseHeartbeatSeconds * 1000,
     );
-    this.idleCheckInterval = setInterval(
-      () => this.checkIdleSessions(),
-      30000,
-    );
+    this.idleCheckInterval = setInterval(() => this.checkIdleSessions(), 30000);
     this.logger.log(
       `GpaySessionService initialized (leaseTTL: ${this.leaseTtlSeconds}s, heartbeat: ${this.leaseHeartbeatSeconds}s, dualStorage: ${this.dualStorageEnabled})`,
     );
@@ -105,9 +102,17 @@ export class GpaySessionService implements OnModuleInit, OnModuleDestroy {
 
     try {
       const client = this.redisService.getClient();
-      const res = await client.set(key, ownerValue, 'EX', this.leaseTtlSeconds, 'NX');
+      const res = await client.set(
+        key,
+        ownerValue,
+        'EX',
+        this.leaseTtlSeconds,
+        'NX',
+      );
       if (res === 'OK') {
-        this.logger.log(`Acquired Redis lease for provider ${providerId} (${ownerValue})`);
+        this.logger.log(
+          `Acquired Redis lease for provider ${providerId} (${ownerValue})`,
+        );
         return true;
       }
       return false;
@@ -121,7 +126,9 @@ export class GpaySessionService implements OnModuleInit, OnModuleDestroy {
 
   public markLeaseLost(providerId: string): void {
     this.leaseLostProviders.add(providerId);
-    this.logger.warn(`[Lease Loss] Marked provider ${providerId} as LEASE_LOST`);
+    this.logger.warn(
+      `[Lease Loss] Marked provider ${providerId} as LEASE_LOST`,
+    );
   }
 
   public isLeaseLost(providerId: string): boolean {
@@ -179,7 +186,9 @@ export class GpaySessionService implements OnModuleInit, OnModuleDestroy {
 
   async releaseProviderLease(providerId: string): Promise<boolean> {
     if (this.isLeaseLost(providerId)) {
-      this.logger.log(`Skipping lease release for ${providerId} (lease was previously lost)`);
+      this.logger.log(
+        `Skipping lease release for ${providerId} (lease was previously lost)`,
+      );
       return false;
     }
 
@@ -191,7 +200,9 @@ export class GpaySessionService implements OnModuleInit, OnModuleDestroy {
       const res = await client.eval(this.releaseScript, 1, key, ownerValue);
       return res === 1;
     } catch (error: any) {
-      this.logger.warn(`Error releasing lease for provider ${providerId}: ${error.message}`);
+      this.logger.warn(
+        `Error releasing lease for provider ${providerId}: ${error.message}`,
+      );
       return false;
     }
   }
@@ -223,7 +234,9 @@ export class GpaySessionService implements OnModuleInit, OnModuleDestroy {
           this.queuedActivations.delete(providerId);
         }
       } catch (e: any) {
-        this.logger.warn(`Redis error during lease heartbeat for ${providerId}: ${e.message}`);
+        this.logger.warn(
+          `Redis error during lease heartbeat for ${providerId}: ${e.message}`,
+        );
       }
     }
   }
@@ -271,7 +284,9 @@ export class GpaySessionService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`Persisted session state for provider ${providerId}`);
       return true;
     } catch (error: any) {
-      this.logger.error(`Failed to persist session state for ${providerId}: ${error.message}`);
+      this.logger.error(
+        `Failed to persist session state for ${providerId}: ${error.message}`,
+      );
       return false;
     }
   }
@@ -279,7 +294,14 @@ export class GpaySessionService implements OnModuleInit, OnModuleDestroy {
   /**
    * Reads and decrypts session state for a provider.
    */
-  async restoreStorageState(providerId: string, merchantId: string): Promise<any | null> {
+  async restoreStorageState(
+    providerId: string,
+    merchantId: string,
+  ): Promise<any | null> {
+    if (providerId.startsWith('temp_') || providerId.startsWith('temp-')) {
+      return null;
+    }
+
     try {
       const response = await firstValueFrom(
         this.httpService.get(
@@ -288,7 +310,7 @@ export class GpaySessionService implements OnModuleInit, OnModuleDestroy {
         ),
       );
 
-      const data = response.data as any;
+      const data = response.data;
       const creds = data?.provider?.credentials || data?.credentials;
       if (!creds) return null;
 
@@ -306,13 +328,17 @@ export class GpaySessionService implements OnModuleInit, OnModuleDestroy {
       }
 
       if (this.dualStorageEnabled && creds.storageState) {
-        this.logger.log(`Restoring session from dual storage plaintext backup for ${providerId}`);
+        this.logger.log(
+          `Restoring session from dual storage plaintext backup for ${providerId}`,
+        );
         return creds.storageState;
       }
 
       return null;
     } catch (error: any) {
-      this.logger.warn(`Could not restore storage state for ${providerId}: ${error.message}`);
+      this.logger.warn(
+        `Could not restore storage state for ${providerId}: ${error.message}`,
+      );
       return null;
     }
   }
@@ -366,7 +392,9 @@ export class GpaySessionService implements OnModuleInit, OnModuleDestroy {
           await this.browserPoolService.releaseContext(providerId);
           await this.releaseProviderLease(providerId);
         } catch (e: any) {
-          this.logger.warn(`Error during idle shutdown for ${providerId}: ${e.message}`);
+          this.logger.warn(
+            `Error during idle shutdown for ${providerId}: ${e.message}`,
+          );
         }
       }
     }

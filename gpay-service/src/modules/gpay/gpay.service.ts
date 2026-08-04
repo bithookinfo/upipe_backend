@@ -11,13 +11,20 @@ import {
 import { PaymentServiceClient } from '../../clients/payment-service.client';
 import { PlaywrightSessionManager } from './playwright-session-manager.service';
 import { GpayReconciliationService } from './gpay-reconciliation.service';
-import { GpayRpcParserService, GpayParsedTransaction } from './gpay-rpc-parser.service';
+import {
+  GpayRpcParserService,
+  GpayParsedTransaction,
+} from './gpay-rpc-parser.service';
 import { GpayEncryptionService } from '../../common/security/gpay-encryption.service';
 
 @Injectable()
 export class GpayService {
   private readonly logger = new Logger(GpayService.name);
   private readonly loginSessions = new Map<string, any>();
+
+  public getLoginSessions() {
+    return this.loginSessions;
+  }
 
   constructor(
     private readonly merchantClient: MerchantServiceClient,
@@ -54,15 +61,23 @@ export class GpayService {
     const existingProvider =
       await this.merchantClient.getProviderByMerchant(merchantId);
 
-    if (existingProvider && (existingProvider.metadata as any)?.gpayRuntime === 'LEGACY') {
+    if (
+      existingProvider &&
+      (existingProvider.metadata as any)?.gpayRuntime === 'LEGACY'
+    ) {
       throw new BadRequestException(
         'This GPay provider is managed by the LEGACY runtime in merchant-service.',
       );
     }
 
     // Check if session is already active in memory
-    if (existingProvider && this.sessionManager.getActiveSession(existingProvider.id)) {
-      this.logger.log(`✅ Reusing active in-memory GPay session for ${data.email}`);
+    if (
+      existingProvider &&
+      this.sessionManager.getActiveSession(existingProvider.id)
+    ) {
+      this.logger.log(
+        `✅ Reusing active in-memory GPay session for ${data.email}`,
+      );
       return {
         success: true,
         message: 'Google Pay connected (session reused)',
@@ -72,15 +87,23 @@ export class GpayService {
     }
 
     let storageStateJson: Record<string, any> | undefined;
-    if (existingProvider && (existingProvider.credentials as any)?.sessionStateEncrypted) {
+    if (
+      existingProvider &&
+      (existingProvider.credentials as any)?.sessionStateEncrypted
+    ) {
       try {
         storageStateJson = this.encryptionService.decryptSessionState(
           (existingProvider.credentials as any).sessionStateEncrypted,
         );
       } catch (e: any) {
-        this.logger.warn(`Failed to decrypt sessionState for ${existingProvider.id}: ${e.message}`);
+        this.logger.warn(
+          `Failed to decrypt sessionState for ${existingProvider.id}: ${e.message}`,
+        );
       }
-    } else if (existingProvider && (existingProvider.credentials as any)?.sessionState) {
+    } else if (
+      existingProvider &&
+      (existingProvider.credentials as any)?.sessionState
+    ) {
       storageStateJson = (existingProvider.credentials as any).sessionState;
     }
 
@@ -90,7 +113,10 @@ export class GpayService {
       provider: 'GPAY',
       status: 'PENDING',
       credentials: { email: data.email, businessId: data.businessId },
-      metadata: { gpayRuntime: 'NEW', browserSessionType: 'IN_MEMORY_PERSISTENT' },
+      metadata: {
+        gpayRuntime: 'NEW',
+        browserSessionType: 'IN_MEMORY_PERSISTENT',
+      },
     };
 
     const session = await this.sessionManager.launchSession(
@@ -151,7 +177,7 @@ export class GpayService {
       organizationId: data.organizationId,
       upiId: data.upiId,
       isSuperAdmin: data.isSuperAdmin,
-      gpayRuntime: 'NEW',
+      gpayRuntime: 'LEGACY', // We must pass LEGACY to prevent merchant-service from forwarding it back to gpay-service
     });
 
     // Update session state in DB
@@ -166,16 +192,34 @@ export class GpayService {
   }
 
   /**
+   * Update GPay UPI ID
+   */
+  async updateGpayUpi(providerId: string, upiId: string, merchantId?: string) {
+    this.logger.log(
+      `📝 Updating GPay UPI via gpay-service for provider: ${providerId}, upiId: ${upiId}`,
+    );
+    return this.merchantClient.updateUpi(providerId, upiId);
+  }
+
+  /**
    * Sync transactions for a merchant within a date range
    */
   async syncTransactions(
     merchantId: string,
     fromDate: Date,
     toDate: Date,
-  ): Promise<{ success: boolean; fetched: number; saved: number; message: string }> {
-    const provider = await this.merchantClient.getProviderByMerchant(merchantId);
+  ): Promise<{
+    success: boolean;
+    fetched: number;
+    saved: number;
+    message: string;
+  }> {
+    const provider =
+      await this.merchantClient.getProviderByMerchant(merchantId);
     if (!provider) {
-      throw new NotFoundException(`No Google Pay provider found for merchant ${merchantId}`);
+      throw new NotFoundException(
+        `No Google Pay provider found for merchant ${merchantId}`,
+      );
     }
 
     if ((provider.metadata as any)?.gpayRuntime === 'LEGACY') {
@@ -200,7 +244,10 @@ export class GpayService {
 
     // Refresh page to trigger batchexecute load
     try {
-      await session.page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+      await session.page.reload({
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      });
       await new Promise((resolve) => setTimeout(resolve, 3000)); // wait for RPC responses
     } catch (e: any) {
       this.logger.warn(`Reload failed during syncTransactions: ${e.message}`);
@@ -238,9 +285,8 @@ export class GpayService {
     // Look up transaction by UTR or order in payment-service
     try {
       if (data.utr) {
-        const existingTxns = await this.paymentClient.findTransactionByExternalId(
-          data.utr,
-        );
+        const existingTxns =
+          await this.paymentClient.findTransactionByExternalId(data.utr);
         if (existingTxns && existingTxns.length > 0) {
           const matched = existingTxns.find(
             (t) =>

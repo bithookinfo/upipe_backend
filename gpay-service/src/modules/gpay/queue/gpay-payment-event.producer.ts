@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import * as crypto from 'crypto';
+import {
+  GPAY_PAYMENT_EVENTS_QUEUE,
+  GPAY_RECONCILIATION_JOB,
+} from './gpay-queue.constants';
 
 export interface GpayPaymentEventPayload {
   providerId: string;
@@ -24,7 +28,7 @@ export class GpayPaymentEventProducer {
   private readonly logger = new Logger(GpayPaymentEventProducer.name);
 
   constructor(
-    @InjectQueue('gpay-payment-events')
+    @InjectQueue(GPAY_PAYMENT_EVENTS_QUEUE)
     private readonly paymentEventsQueue: Queue<GpayPaymentEventPayload>,
   ) {}
 
@@ -40,7 +44,7 @@ export class GpayPaymentEventProducer {
       .digest('hex')}`;
 
     const job = await this.paymentEventsQueue.add(
-      'reconcile-transaction',
+      GPAY_RECONCILIATION_JOB,
       payload,
       {
         jobId: sha256Id,

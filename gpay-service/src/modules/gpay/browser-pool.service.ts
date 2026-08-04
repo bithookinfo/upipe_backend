@@ -23,6 +23,8 @@ interface SharedBrowserInstance {
   id: string;
   browser: Browser;
   activeContextCount: number;
+  emptySince?: number;
+  recycleTimer?: NodeJS.Timeout;
 }
 
 @Injectable()
@@ -31,12 +33,15 @@ export class BrowserPoolService implements OnModuleInit, OnModuleDestroy {
   private sharedBrowsers: SharedBrowserInstance[] = [];
   private activeContexts: Map<string, ActivePoolContext> = new Map();
 
+  public browserRecycleCount = 0;
+  public capacityRejectionCount = 0;
+
   private readonly maxContextsPerBrowser: number;
   private readonly maxBrowsersPerInstance: number;
   private readonly maxPersistentProfilesPerInstance: number;
   private readonly nodeId: string;
   private readonly userAgent =
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 
   constructor(private readonly configService: ConfigService) {
     this.maxContextsPerBrowser = Number(
@@ -60,7 +65,9 @@ export class BrowserPoolService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
-    this.logger.log('Shutting down BrowserPoolService and closing all browsers...');
+    this.logger.log(
+      'Shutting down BrowserPoolService and closing all browsers...',
+    );
     await this.closeAll();
   }
 
@@ -124,8 +131,6 @@ export class BrowserPoolService implements OnModuleInit, OnModuleDestroy {
       const context = await sharedBrowser.browser.newContext(contextOptions);
       const page = await context.newPage();
 
-      sharedBrowser.activeContextCount++;
-
       const activeContext: ActivePoolContext = {
         providerId,
         browserId: sharedBrowser.id,
@@ -161,9 +166,9 @@ export class BrowserPoolService implements OnModuleInit, OnModuleDestroy {
     providerId: string,
     customProfilePath?: string,
   ): Promise<ActivePoolContext> {
-    const currentPersistentCount = Array.from(this.activeContexts.values()).filter(
-      (c) => c.isPersistent,
-    ).length;
+    const currentPersistentCount = Array.from(
+      this.activeContexts.values(),
+    ).filter((c) => c.isPersistent).length;
     if (currentPersistentCount >= this.maxPersistentProfilesPerInstance) {
       throw new Error(
         `Persistent profile capacity reached (${currentPersistentCount}/${this.maxPersistentProfilesPerInstance})`,
@@ -181,13 +186,51 @@ export class BrowserPoolService implements OnModuleInit, OnModuleDestroy {
       fs.mkdirSync(profileDir, { recursive: true });
     }
 
-    const context = await chromium.launchPersistentContext(profileDir, {
-      headless: true,
-      userAgent: this.userAgent,
-      viewport: { width: 1280, height: 800 },
-      ignoreHTTPSErrors: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-    });
+    const launchOpts = this.getLaunchOptions();
+
+    let context: any = null;
+    let launchAttempts = 0;
+    while (launchAttempts < 3) {
+      try {
+        this.clearSingletonLock(profileDir);
+        context = await chromium.launchPersistentContext(profileDir, {
+          ...launchOpts,
+          userAgent: this.userAgent,
+          viewport: {
+            width: 1366 + Math.floor(Math.random() * 100),
+            height: 768 + Math.floor(Math.random() * 50),
+          },
+          deviceScaleFactor: 1.25,
+          isMobile: false,
+          hasTouch: false,
+          locale: 'en-IN',
+          timezoneId: 'Asia/Kolkata',
+          ignoreHTTPSErrors: true,
+        });
+        break;
+      } catch (e: any) {
+        const msg = String(e?.message || '').toLowerCase();
+        if (
+          msg.includes('singletonlock') ||
+          msg.includes('processsingleton') ||
+          msg.includes('target page, context or browser has been closed')
+        ) {
+          launchAttempts++;
+          if (launchAttempts >= 3) {
+            this.logger.warn(
+              `⚠️ GPay profile persistently locked for restore ${providerId}`,
+            );
+            throw e;
+          }
+          this.logger.warn(
+            `⚠️ GPay profile locked for restore ${providerId}. Retrying in 1s...`,
+          );
+          await new Promise((r) => setTimeout(r, 1000));
+        } else {
+          throw e;
+        }
+      }
+    }
 
     const pages = context.pages();
     const page = pages.length > 0 ? pages[0] : await context.newPage();
@@ -205,7 +248,9 @@ export class BrowserPoolService implements OnModuleInit, OnModuleDestroy {
 
     context.on('close', () => {
       this.activeContexts.delete(providerId);
-      this.logger.log(`[Mode B] Persistent context closed for provider ${providerId}`);
+      this.logger.log(
+        `[Mode B] Persistent context closed for provider ${providerId}`,
+      );
     });
 
     this.logger.log(
@@ -233,36 +278,50 @@ export class BrowserPoolService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (bestCandidate) {
+      bestCandidate.activeContextCount++;
+      if (bestCandidate.recycleTimer) {
+        clearTimeout(bestCandidate.recycleTimer);
+        bestCandidate.recycleTimer = undefined;
+        bestCandidate.emptySince = undefined;
+        this.logger.log(
+          `Cancelled recycling for browser ${bestCandidate.id} as a new context was assigned.`,
+        );
+      }
       return bestCandidate;
     }
 
-    if (this.sharedBrowsers.length < this.maxBrowsersPerInstance) {
-      const newBrowser = await this.launchSharedBrowser();
-      this.sharedBrowsers.push(newBrowser);
-      return newBrowser;
+    if (this.sharedBrowsers.length >= this.maxBrowsersPerInstance) {
+      this.capacityRejectionCount++;
+      throw new Error(
+        `Capacity Rejection: Maximum shared browsers (${this.maxBrowsersPerInstance}) reached on node ${this.nodeId}`,
+      );
     }
 
-    // All existing browsers are at capacity; return least loaded even if over limit to avoid blocking
-    this.logger.warn(
-      `All ${this.sharedBrowsers.length} shared browsers are at capacity (${this.maxContextsPerBrowser}). Using least loaded.`,
-    );
-    return this.sharedBrowsers.reduce((prev, curr) =>
-      prev.activeContextCount <= curr.activeContextCount ? prev : curr,
-    );
+    const newBrowser = await this.launchSharedBrowser();
+    newBrowser.activeContextCount++;
+    this.sharedBrowsers.push(newBrowser);
+    return newBrowser;
   }
 
   private async launchSharedBrowser(): Promise<SharedBrowserInstance> {
     const browserId = `shared-browser-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const launchOpts = this.getLaunchOptions();
+
     const browser = await chromium.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+      ...launchOpts,
     });
 
-    this.logger.log(`Launched new shared Chromium browser instance: ${browserId}`);
+    this.logger.log(
+      `Launched new shared Chromium browser instance: ${browserId}`,
+    );
 
     browser.on('disconnected', () => {
-      this.logger.warn(`Shared browser ${browserId} disconnected unexpectedly.`);
-      this.sharedBrowsers = this.sharedBrowsers.filter((b) => b.id !== browserId);
+      this.logger.warn(
+        `Shared browser ${browserId} disconnected unexpectedly.`,
+      );
+      this.sharedBrowsers = this.sharedBrowsers.filter(
+        (b) => b.id !== browserId,
+      );
     });
 
     return {
@@ -272,11 +331,114 @@ export class BrowserPoolService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  private clearSingletonLock(userDataDir: string) {
+    try {
+      const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+      for (const file of lockFiles) {
+        const filePath = path.join(userDataDir, file);
+        try {
+          fs.unlinkSync(filePath);
+          this.logger.log(`🗑️ Removed stale ${file} from ${userDataDir}`);
+        } catch (err: any) {
+          if (err.code !== 'ENOENT') {
+            this.logger.warn(
+              `Could not remove ${file} in ${userDataDir}: ${err.message}`,
+            );
+          }
+        }
+      }
+    } catch (e: any) {
+      this.logger.warn(
+        `Failed to clean SingletonLock in ${userDataDir}: ${e.message}`,
+      );
+    }
+  }
+
+  private getLaunchOptions() {
+    let headless = process.env.GPAY_HEADLESS !== 'false';
+    if (process.platform === 'linux' && !process.env.DISPLAY) {
+      headless = true;
+    }
+    const browserType = process.env.GPAY_BROWSER || 'chromium';
+    const proxy = process.env.GPAY_PROXY;
+    const proxyConfig = proxy ? { server: proxy } : undefined;
+
+    const opts: any = {
+      headless,
+      proxy: proxyConfig,
+    };
+
+    if (browserType === 'chromium') {
+      opts.args = [
+        headless ? '--headless=shell' : '',
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--use-fake-ui-for-media-stream',
+        '--use-fake-device-for-media-stream',
+        '--disable-dev-shm-usage',
+        '--disable-notifications',
+        '--disable-background-networking',
+        '--disable-gpu',
+        '--disable-extensions',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--mute-audio',
+        '--disable-software-rasterizer',
+        '--disable-canvas-aa',
+        '--disable-2d-canvas-clip-aa',
+        '--disable-gl-drawing-for-tests',
+        '--disable-crash-reporter',
+        '--js-flags=--max-old-space-size=256',
+      ];
+      opts.channel =
+        process.env.GPAY_USE_REAL_CHROME !== 'false' ? 'chrome' : undefined;
+
+      if (headless) {
+        opts.args.push('--headless=new');
+      }
+    }
+
+    return opts;
+  }
+
   private handleContextClosed(providerId: string, browserId: string): void {
     this.activeContexts.delete(providerId);
     const browserInstance = this.sharedBrowsers.find((b) => b.id === browserId);
     if (browserInstance && browserInstance.activeContextCount > 0) {
       browserInstance.activeContextCount--;
+
+      if (
+        browserInstance.activeContextCount === 0 &&
+        !browserInstance.recycleTimer
+      ) {
+        browserInstance.emptySince = Date.now();
+        const timeoutMs = Number(
+          this.configService.get('GPAY_EMPTY_BROWSER_IDLE_TIMEOUT_MS') ||
+            300000,
+        );
+
+        browserInstance.recycleTimer = setTimeout(async () => {
+          if (browserInstance.activeContextCount === 0) {
+            this.logger.log(
+              `Empty browser timeout expired for ${browserId}. Recycling Chromium worker.`,
+            );
+            try {
+              await browserInstance.browser.close().catch(() => {});
+            } catch (e: any) {
+              this.logger.warn(
+                `Error recycling browser ${browserId}: ${e.message}`,
+              );
+            }
+            this.sharedBrowsers = this.sharedBrowsers.filter(
+              (b) => b.id !== browserId,
+            );
+            this.browserRecycleCount++;
+          }
+        }, timeoutMs);
+      }
     }
   }
 
@@ -288,7 +450,9 @@ export class BrowserPoolService implements OnModuleInit, OnModuleDestroy {
       await active.page.close().catch(() => {});
       await active.context.close().catch(() => {});
     } catch (error: any) {
-      this.logger.warn(`Error closing context for provider ${providerId}: ${error.message}`);
+      this.logger.warn(
+        `Error closing context for provider ${providerId}: ${error.message}`,
+      );
     } finally {
       this.handleContextClosed(providerId, active.browserId);
       this.logger.log(`Released context for provider ${providerId}`);
