@@ -90,62 +90,69 @@ export class SubscriptionAssignmentController {
         const plan = await this.prisma.subscriptionPlan.findUnique({ where: { id } });
         if (!plan) return { success: false, message: 'Plan not found', data: null };
 
-        // Plan edit protection
-        const activeSubscriptions = await this.prisma.orgSubscription.findMany({
-            where: {
-                planId: id,
-                status: 'ACTIVE',
-                OR: [
-                    { endDate: null },
-                    { endDate: { gt: new Date() } }
-                ]
-            },
-            select: { organizationId: true },
-            distinct: ['organizationId'],
-            take: 26
-        });
+        // Check if this is a metadata-only update (e.g., toggling visibility/features)
+        const isMetadataOnlyUpdate = Object.keys(body).every(key => 
+            ['isActive', 'isPublic', 'isFeatured', 'sortOrder'].includes(key)
+        );
 
-        if (activeSubscriptions.length > 0) {
-            const orgIds = activeSubscriptions.map(s => s.organizationId);
-            const organizations = [];
-            
-            try {
-                const orgUrl = process.env.ORGANIZATION_SERVICE_URL;
-                if (orgUrl) {
-                    for (const orgId of orgIds.slice(0, 25)) {
-                        try {
-                           const res = await axios.get(`${orgUrl}/organizations/${orgId}`, {
-                             headers: { 'x-user-type': 'SUPER_ADMIN' }
-                           });
-                           organizations.push({
-                               id: orgId,
-                               name: res.data?.data?.organization?.name || res.data?.data?.name || orgId
-                           });
-                        } catch (e) {
-                           organizations.push({ id: orgId, name: orgId });
+        if (!isMetadataOnlyUpdate) {
+            // Plan edit protection for core fields
+            const activeSubscriptions = await this.prisma.orgSubscription.findMany({
+                where: {
+                    planId: id,
+                    status: 'ACTIVE',
+                    OR: [
+                        { endDate: null },
+                        { endDate: { gt: new Date() } }
+                    ]
+                },
+                select: { organizationId: true },
+                distinct: ['organizationId'],
+                take: 26
+            });
+
+            if (activeSubscriptions.length > 0) {
+                const orgIds = activeSubscriptions.map(s => s.organizationId);
+                const organizations = [];
+                
+                try {
+                    const orgUrl = process.env.ORGANIZATION_SERVICE_URL;
+                    if (orgUrl) {
+                        for (const orgId of orgIds.slice(0, 25)) {
+                            try {
+                               const res = await axios.get(`${orgUrl}/organizations/${orgId}`, {
+                                 headers: { 'x-user-type': 'SUPER_ADMIN' }
+                               });
+                               organizations.push({
+                                   id: orgId,
+                                   name: res.data?.data?.organization?.name || res.data?.data?.name || orgId
+                               });
+                            } catch (e) {
+                               organizations.push({ id: orgId, name: orgId });
+                            }
                         }
+                    } else {
+                        organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
                     }
-                } else {
-                    organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
+                } catch (err) {
+                   organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
                 }
-            } catch (err) {
-               organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
+
+                throw new HttpException({
+                    code: 'PLAN_IN_USE',
+                    message: 'This plan cannot be edited because it is currently being used by organizations.',
+                    activeOrganizationCount: activeSubscriptions.length > 25 ? 26 : activeSubscriptions.length,
+                    organizations: organizations,
+                    hasMore: activeSubscriptions.length > 25
+                }, HttpStatus.CONFLICT);
             }
 
-            throw new HttpException({
-                code: 'PLAN_IN_USE',
-                message: 'This plan cannot be edited because it is currently being used by organizations.',
-                activeOrganizationCount: activeSubscriptions.length > 25 ? 26 : activeSubscriptions.length,
-                organizations: organizations,
-                hasMore: activeSubscriptions.length > 25
-            }, HttpStatus.CONFLICT);
-        }
-
-        const billingCycle = body.billingCycle || plan.billingCycle;
-        if (billingCycle !== 'LIFETIME') {
-            const newDurationDays = body.durationDays !== undefined ? body.durationDays : plan.durationDays;
-            if (newDurationDays == null || typeof newDurationDays !== 'number' || !Number.isInteger(newDurationDays) || newDurationDays <= 0 || newDurationDays > 3650) {
-                return { success: false, message: 'durationDays is mandatory and must be a positive integer (max 3650) for non-lifetime plans', data: null };
+            const billingCycle = body.billingCycle || plan.billingCycle;
+            if (billingCycle !== 'LIFETIME') {
+                const newDurationDays = body.durationDays !== undefined ? body.durationDays : plan.durationDays;
+                if (newDurationDays == null || typeof newDurationDays !== 'number' || !Number.isInteger(newDurationDays) || newDurationDays <= 0 || newDurationDays > 3650) {
+                    return { success: false, message: 'durationDays is mandatory and must be a positive integer (max 3650) for non-lifetime plans', data: null };
+                }
             }
         }
 
