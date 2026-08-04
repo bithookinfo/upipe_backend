@@ -221,12 +221,7 @@ export class SubscriptionAssignmentController {
 
         const activeSubscriptions = await this.prisma.orgSubscription.findMany({
             where: {
-                planId: id,
-                status: 'ACTIVE',
-                OR: [
-                    { endDate: null },
-                    { endDate: { gt: new Date() } }
-                ]
+                planId: id
             },
             select: { organizationId: true },
             distinct: ['organizationId'],
@@ -295,12 +290,7 @@ export class SubscriptionAssignmentController {
 
         const activeSubscriptions = await this.prisma.orgSubscription.findMany({
             where: {
-                planId: id,
-                status: 'ACTIVE',
-                OR: [
-                    { endDate: null },
-                    { endDate: { gt: new Date() } }
-                ]
+                planId: id
             },
             select: { organizationId: true },
             distinct: ['organizationId'],
