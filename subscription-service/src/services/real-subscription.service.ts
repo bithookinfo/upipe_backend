@@ -158,6 +158,50 @@ export class RealSubscriptionService {
         }
       }
 
+      const slotUsageMap: Record<string, number> = {};
+      slots.forEach((s) => { slotUsageMap[s.id] = 0; });
+
+      try {
+        const paymentServiceUrl = process.env.PAYMENT_SERVICE_URL || "http://localhost:4003";
+        const axios = require("axios");
+        const tsRes = await axios.get(`${paymentServiceUrl}/orders/organization-timestamps/${organizationId}`, {
+          headers: { "x-internal-token": process.env.INTERNAL_TOKEN },
+          timeout: 3000
+        });
+
+        if (tsRes.data?.success && Array.isArray(tsRes.data.timestamps)) {
+          const timestamps = tsRes.data.timestamps;
+          const sortedNonExpired = [...nonExpiredSlots].sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+
+          for (const ts of timestamps) {
+            const orderDate = new Date(ts);
+            const targetSlot = sortedNonExpired.find((s) => {
+              const start = new Date(s.startDate);
+              const end = s.endDate ? new Date(s.endDate) : new Date(8640000000000000);
+              const cap = s.plan.maxTransactions || 0;
+              const currentUsed = slotUsageMap[s.id] || 0;
+              return orderDate >= start && orderDate <= end && currentUsed < cap;
+            });
+
+            if (targetSlot) {
+              slotUsageMap[targetSlot.id] = (slotUsageMap[targetSlot.id] || 0) + 1;
+            }
+          }
+        }
+      } catch (e) {
+        // Fallback: ignore error if payment service timestamp call fails
+      }
+
+      const overallStartDate = nonExpiredSlots.reduce((earliest, s) => {
+        return s.startDate < earliest ? s.startDate : earliest;
+      }, currentSlot.startDate);
+
+      const overallEndDate = nonExpiredSlots.reduce((latest, s) => {
+        if (!s.endDate) return latest;
+        if (!latest) return s.endDate;
+        return s.endDate > latest ? s.endDate : latest;
+      }, currentSlot.endDate);
+
       return {
         success: true,
         // Backward compat: expose a single "subscription" object for existing consumers
@@ -166,8 +210,8 @@ export class RealSubscriptionService {
           organizationId,
           plan,
           status: activeSlots.length > 0 || unassignedSlots.length > 0 ? "ACTIVE" : "EXPIRED",
-          startDate: currentSlot.startDate,
-          endDate: currentSlot.endDate,
+          startDate: overallStartDate,
+          endDate: overallEndDate,
           autoRenew: currentSlot.autoRenew,
           limits: aggregatedLimits,
           currentUsage: {
@@ -179,7 +223,6 @@ export class RealSubscriptionService {
           },
           providerAccess: Object.values(providerAccessMap),
         },
-        // New slot-based response
         slots: slots.map((s) => ({
           id: s.id,
           merchantId: s.merchantId,
@@ -190,6 +233,8 @@ export class RealSubscriptionService {
           endDate: s.endDate,
           purchaseId: s.purchaseId,
           createdAt: s.createdAt,
+          providerAccess: s.plan.providerAccess,
+          usedTxn: slotUsageMap[s.id] || 0,
         })),
         summary: {
           totalSlots: slots.length,
@@ -304,7 +349,7 @@ export class RealSubscriptionService {
       const resKey = `reservations:${organizationId}:${providerCode}`;
       const activeReservationsStr = await redis.get(resKey);
       let activeReservations: Array<{ id: string, expiresAt: number }> = activeReservationsStr ? JSON.parse(activeReservationsStr) : [];
-      
+
       const now = Date.now();
       activeReservations = activeReservations.filter(r => r.expiresAt > now);
 
@@ -314,7 +359,7 @@ export class RealSubscriptionService {
 
       const reservationId = require('crypto').randomUUID();
       activeReservations.push({ id: reservationId, expiresAt: now + 5 * 60 * 1000 }); // 5 min TTL
-      
+
       // Store reservations and set TTL for the key
       await redis.set(resKey, JSON.stringify(activeReservations), 'PX', 5 * 60 * 1000);
 
@@ -343,7 +388,7 @@ export class RealSubscriptionService {
       const resKey = `reservations:${organizationId}:${providerCode}`;
       const activeReservationsStr = await redis.get(resKey);
       if (!activeReservationsStr) throw new BadRequestException('Reservation not found or expired');
-      
+
       let activeReservations: Array<{ id: string, expiresAt: number }> = JSON.parse(activeReservationsStr);
       const now = Date.now();
       activeReservations = activeReservations.filter(r => r.expiresAt > now);
@@ -352,7 +397,7 @@ export class RealSubscriptionService {
       if (resIndex === -1) throw new BadRequestException('Reservation not found or expired');
 
       activeReservations.splice(resIndex, 1);
-      
+
       if (activeReservations.length > 0) {
         await redis.set(resKey, JSON.stringify(activeReservations), 'PX', 5 * 60 * 1000);
       } else {
@@ -1457,7 +1502,7 @@ export class RealSubscriptionService {
     }
   }
 
-  
+
   async simulateNotification(organizationId: string, type: 'expiry' | 'renewal', slotId?: string) {
     try {
       const orgServiceUrl = process.env.ORGANIZATION_SERVICE_URL;
@@ -1846,7 +1891,7 @@ export class RealSubscriptionService {
       if (limit <= 0) return;
 
       const usagePct = (monthlyUsage.orderCount / limit) * 100;
-      
+
       const milestones = [100, 90, 80, 70];
       let crossedMilestone: number | null = null;
       for (const m of milestones) {
@@ -1866,14 +1911,14 @@ export class RealSubscriptionService {
               milestone: crossedMilestone
             }
           });
-          
+
           // Successfully obtained lock -> Fire Email
           this.logger.log(`Firing ${crossedMilestone}% usage alert for org ${organizationId}`);
-          
+
           // Call notification service
           const notificationServiceUrl = process.env.NOTIFICATION_SERVICE_URL as string;
           const orgServiceUrl = process.env.ORGANIZATION_SERVICE_URL as string;
-            
+
           try {
             const orgResponse = await axios.get(`${orgServiceUrl}/organizations/${organizationId}`, { headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": organizationId } });
             const orgData = orgResponse.data?.data?.organization || orgResponse.data?.organization || orgResponse.data?.data || orgResponse.data;
@@ -1881,16 +1926,16 @@ export class RealSubscriptionService {
             const orgName = orgData?.name;
 
             if (adminEmail) {
-               await axios.post(`${notificationServiceUrl}/internal/send/email`, {
-                 to: adminEmail,
-                 type: 'usage_alert',
-                 data: {
-                   milestone: crossedMilestone,
-                   appName: 'Upipe',
-                   orgName: orgName,
-                   usagePct: Math.floor(usagePct)
-                 }
-               }, { headers: { "x-internal-token": process.env.INTERNAL_TOKEN } });
+              await axios.post(`${notificationServiceUrl}/internal/send/email`, {
+                to: adminEmail,
+                type: 'usage_alert',
+                data: {
+                  milestone: crossedMilestone,
+                  appName: 'Upipe',
+                  orgName: orgName,
+                  usagePct: Math.floor(usagePct)
+                }
+              }, { headers: { "x-internal-token": process.env.INTERNAL_TOKEN } });
             }
           } catch (err: any) {
             this.logger.error(`Failed to fetch org details or send email for org ${organizationId}: ${err.message}`);
@@ -1898,7 +1943,7 @@ export class RealSubscriptionService {
         } catch (err: any) {
           // If Prisma unique constraint fails, it means alert already sent
           if (err.code !== 'P2002') {
-             this.logger.error(`Error creating usage alert record: ${err.message}`);
+            this.logger.error(`Error creating usage alert record: ${err.message}`);
           }
         }
       }

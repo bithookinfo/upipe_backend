@@ -138,6 +138,22 @@ export class OrdersService {
     }
   }
 
+  async getOrderTimestamps(organizationId: string) {
+    try {
+      const orders = await this.prisma.order.findMany({
+        where: { organizationId },
+        select: { createdAt: true },
+        orderBy: { createdAt: "asc" }
+      });
+      return {
+        success: true,
+        timestamps: orders.map(o => o.createdAt)
+      };
+    } catch (err: any) {
+      return { success: false, timestamps: [] };
+    }
+  }
+
   async getOrders(
     page: number = 1,
     limit: number = 20,
@@ -2306,6 +2322,12 @@ export class SimpleOrdersController {
     @Query('merchantId') merchantId?: string,
   ) {
     return this.ordersService.getQRUsage(organizationId, merchantId);
+  }
+
+  @Get('organization-timestamps/:organizationId')
+  @ApiOperation({ summary: 'Get order creation timestamps for an organization' })
+  async getOrderTimestamps(@Param('organizationId') organizationId: string) {
+    return this.ordersService.getOrderTimestamps(organizationId);
   }
 
 

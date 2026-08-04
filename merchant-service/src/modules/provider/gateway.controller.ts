@@ -601,12 +601,12 @@ export class GatewayController {
 
     const merchantId = body.merchantId || "temp-" + Date.now();
     return this.gpayService.connectGPay(merchantId, {
-      email: body.username,
+      email: body.username?.trim(),
       password: body.password,
       organizationId: body.organizationId,
       sessionId: body.sessionId,
       businessId: body.businessId,
-      upiId: body.upiId,
+      upiId: body.upiId?.trim(),
       recoveryPhoneNumber: body.recoveryPhoneNumber,
       googleVerificationCode: body.googleVerificationCode,
       isSuperAdmin,

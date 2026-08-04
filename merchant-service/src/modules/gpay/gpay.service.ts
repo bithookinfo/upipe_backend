@@ -2206,17 +2206,17 @@ export class GpayService implements OnModuleDestroy {
       if (emailNorm) {
         provider =
           candidates.find((p) => {
-            const acct = (p.accountIdentifier || "").toLowerCase();
+            const acct = (p.accountIdentifier || "").toLowerCase().trim();
             const cred = (p.credentials as { email?: string } | null)?.email;
             const credStr =
-              typeof cred === "string" ? cred.toLowerCase() : "";
+              typeof cred === "string" ? cred.toLowerCase().trim() : "";
             return acct === emailNorm || credStr === emailNorm;
           }) ?? null;
       }
       if (!provider) {
         provider =
           candidates.find(
-            (p) => (p.accountIdentifier || "").toLowerCase() === upiNorm,
+            (p) => (p.accountIdentifier || "").toLowerCase().trim() === upiNorm,
           ) ?? null;
       }
       if (!provider && candidates.length === 1) {
