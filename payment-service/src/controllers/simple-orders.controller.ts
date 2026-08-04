@@ -498,6 +498,14 @@ export class OrdersService {
           }
         }
 
+        if (!providerType && providerVpa) {
+          const suffix = providerVpa.split("@")[1]?.toLowerCase() || "";
+          if (/ybl|ibl|axl/.test(suffix)) providerType = "PHONEPE";
+          else if (/okicici|okaxis|oksbi|okhdfc/.test(suffix)) providerType = "GPAY";
+          else if (/pty|ptsbi|pthdfc|ptaxis|ptyes/.test(suffix)) providerType = "PAYTM";
+          else if (/fbpe|bharatpe/.test(suffix)) providerType = "BHARATPE";
+        }
+
         const utr = latestTransaction?.utr || order.utr || (order.metadata as any)?.utr;
 
         // Derive paidBy similar to OrderDetails: prefer transaction customer name when available

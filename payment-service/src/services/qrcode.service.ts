@@ -81,7 +81,7 @@ export class QrcodeService {
       phonePeIntent = `phonepe://native?data=${phonepeBase64}&id=p2ppayment`;
     }
 
-    const paytmIntent = `paytmmp://pay?${upiParams.toString()}`;
+    const paytmIntent = `paytmmp://cash_wallet&featuretype=money_transfer?${upiParams.toString()}`;
 
     const tezIntent = `tez://upi/pay?${upiParams.toString()}`;
 

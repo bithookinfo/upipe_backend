@@ -313,9 +313,11 @@ export class GpayService implements OnModuleDestroy {
         "--disable-software-rasterizer",
         "--disable-canvas-aa",
         "--disable-2d-canvas-clip-aa",
-        "--disable-gl-drawing-for-tests",
         "--disable-crash-reporter",
-        "--js-flags=--max-old-space-size=256"
+        "--disable-site-isolation-trials",
+        "--disk-cache-size=1",
+        "--media-cache-size=1",
+        "--js-flags=--max-old-space-size=128"
       ];
       opts.channel = this.parseBooleanEnv(process.env.GPAY_USE_REAL_CHROME, true)
         ? "chrome"

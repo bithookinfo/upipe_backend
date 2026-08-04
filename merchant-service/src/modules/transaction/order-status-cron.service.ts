@@ -52,7 +52,9 @@ export class OrderStatusCronService {
         );
         this.isCheckingPendingOrders = false;
       } else {
-        this.logger.debug(`[Order Status] Skipping tick — previous check still running (${Math.round(elapsed / 1000)}s)`);
+        this.logger.debug(
+          `[Order Status] Skipping tick — previous check still running (${Math.round(elapsed / 1000)}s)`,
+        );
         return;
       }
     }
@@ -70,8 +72,8 @@ export class OrderStatusCronService {
           includePlatform: true,
         },
         timeout: 10000,
-          headers: { "x-internal-token": process.env.INTERNAL_TOKEN }
-    });
+        headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": "platform-org-id" },
+      });
 
       const pendingOrders = (ordersResponse.data?.orders || []).filter(
         (o: any) => new Date(o.createdAt) >= thirtyMinutesAgo,
@@ -92,7 +94,7 @@ export class OrderStatusCronService {
 
       const merchantEntries = Array.from(byMerchant.entries());
       const merchantIds = merchantEntries.map(([id]) => id);
-      
+
       const allProviders = await this.prisma.merchantProvider.findMany({
         where: {
           merchantId: { in: merchantIds },
@@ -105,7 +107,8 @@ export class OrderStatusCronService {
 
       const providersByMerchant = new Map<string, any[]>();
       for (const p of allProviders) {
-        if (!providersByMerchant.has(p.merchantId)) providersByMerchant.set(p.merchantId, []);
+        if (!providersByMerchant.has(p.merchantId))
+          providersByMerchant.set(p.merchantId, []);
         providersByMerchant.get(p.merchantId)!.push(p);
       }
 
@@ -116,16 +119,19 @@ export class OrderStatusCronService {
         await Promise.all(
           chunk.map(async ([merchantId, orders]) => {
             try {
-              const merchantProviders = providersByMerchant.get(merchantId) || [];
+              const merchantProviders =
+                providersByMerchant.get(merchantId) || [];
               await this.checkOrdersForMerchant(orders, merchantProviders);
             } catch (error: any) {
               const msg =
-                error?.message || error?.response?.data?.message || String(error);
+                error?.message ||
+                error?.response?.data?.message ||
+                String(error);
               this.logger.error(
                 `Failed to check orders for merchant ${merchantId}: ${msg}`,
               );
             }
-          })
+          }),
         );
       }
     } catch (error: any) {
@@ -145,47 +151,57 @@ export class OrderStatusCronService {
     if (orders.length === 0 || providers.length === 0) return;
     const merchantId = orders[0].merchantId;
 
-    this.logger.log(`[Order Status Debug] Found ${providers.length} ACTIVE providers for merchant ${merchantId}`);
+    this.logger.log(
+      `[Order Status Debug] Found ${providers.length} ACTIVE providers for merchant ${merchantId}`,
+    );
 
-    await Promise.all(providers.map(async (provider) => {
-      if (provider.status === "EXPIRED" && provider.providerType !== "GPAY") {
-        this.logger.warn(`⚠️ Skipping provider ${provider.providerType} (${provider.id}) in OrderStatus (STATUS: EXPIRED)`);
-        return;
-      }
+    await Promise.all(
+      providers.map(async (provider) => {
+        if (provider.status === "EXPIRED" && provider.providerType !== "GPAY") {
+          this.logger.warn(
+            `⚠️ Skipping provider ${provider.providerType} (${provider.id}) in OrderStatus (STATUS: EXPIRED)`,
+          );
+          return;
+        }
 
-      if (provider.status === "EXPIRED" && provider.providerType === "GPAY") {
-        this.logger.log(`🔍 [DIAGNOSTIC] Attempting GPay sync even though status is EXPIRED (Provider: ${provider.id})`);
-      }
+        if (provider.status === "EXPIRED" && provider.providerType === "GPAY") {
+          this.logger.log(
+            `🔍 [DIAGNOSTIC] Attempting GPay sync even though status is EXPIRED (Provider: ${provider.id})`,
+          );
+        }
 
-      const meta = (provider.metadata as any) || {};
-      if (
-        provider.providerType === "BHARATPE" &&
-        meta?.authError === "UNAUTHORIZED"
-      ) {
-        return;
-      }
+        const meta = (provider.metadata as any) || {};
+        if (
+          provider.providerType === "BHARATPE" &&
+          meta?.authError === "UNAUTHORIZED"
+        ) {
+          return;
+        }
 
-      const config = provider.credentials as any;
+        const config = provider.credentials as any;
 
-      if (provider.providerType === "PAYTM") {
-        await this.checkPaytmOrdersForMerchant(orders, provider, config);
-      } else if (provider.providerType === "PHONEPE") {
-        await this.checkPhonePeOrdersForMerchant(orders, provider, config);
-      } else if (provider.providerType === "BHARATPE") {
-        await this.checkBharatPeOrdersForMerchant(orders, provider, config);
-      } else if (provider.providerType === "GPAY") {
-        await this.checkGPayOrdersForMerchant(orders, provider, config, {
-          immediate: false,
-        });
-      } else if (provider.providerType === "QUINTUS") {
-        await this.checkQuintusPayOrdersForMerchant(orders, provider, config);
-      } else if (provider.providerType === "HDFC") {
-        await this.checkHdfcOrdersForMerchant(orders, provider, config);
-      }
-    }));
+        if (provider.providerType === "PAYTM") {
+          await this.checkPaytmOrdersForMerchant(orders, provider, config);
+        } else if (provider.providerType === "PHONEPE") {
+          await this.checkPhonePeOrdersForMerchant(orders, provider, config);
+        } else if (provider.providerType === "BHARATPE") {
+          await this.checkBharatPeOrdersForMerchant(orders, provider, config);
+        } else if (provider.providerType === "GPAY") {
+          await this.checkGPayOrdersForMerchant(orders, provider, config, {
+            immediate: false,
+          });
+        } else if (provider.providerType === "QUINTUS") {
+          await this.checkQuintusPayOrdersForMerchant(orders, provider, config);
+        } else if (provider.providerType === "HDFC") {
+          await this.checkHdfcOrdersForMerchant(orders, provider, config);
+        }
+      }),
+    );
   }
 
-  async tryMatchPendingOrdersForGpayProvider(providerId: string): Promise<void> {
+  async tryMatchPendingOrdersForGpayProvider(
+    providerId: string,
+  ): Promise<void> {
     try {
       const provider = await this.prisma.merchantProvider.findFirst({
         where: {
@@ -201,17 +217,26 @@ export class OrderStatusCronService {
 
       const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
       const ordersResponse = await axios.get(`${paymentServiceUrl}/orders`, {
-        params: { status: "PENDING", limit: 50, merchantId: provider.merchantId, includePlatform: true },
+        params: {
+          status: "PENDING",
+          limit: 50,
+          merchantId: provider.merchantId,
+          includePlatform: true,
+        },
         timeout: 10000,
-          headers: { "x-internal-token": process.env.INTERNAL_TOKEN }
-    });
+        headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": "platform-org-id" },
+      });
       const fetchedOrders = ordersResponse.data?.orders || [];
-      this.logger.log(`[Order Status Debug] tryMatch fetched ${fetchedOrders.length} PENDING orders for merchant ${provider.merchantId}`);
-      
+      this.logger.log(
+        `[Order Status Debug] tryMatch fetched ${fetchedOrders.length} PENDING orders for merchant ${provider.merchantId}`,
+      );
+
       const pendingOrders = fetchedOrders.filter(
         (o: any) => new Date(o.createdAt) >= thirtyMinutesAgo,
       );
-      this.logger.log(`[Order Status Debug] tryMatch filtered to ${pendingOrders.length} recent orders`);
+      this.logger.log(
+        `[Order Status Debug] tryMatch filtered to ${pendingOrders.length} recent orders`,
+      );
       if (pendingOrders.length === 0) return;
 
       const config = provider.credentials as any;
@@ -238,10 +263,17 @@ export class OrderStatusCronService {
       if (!merchantSession || !merchantCsrfToken) return;
 
       const now = new Date();
-      const oldestOrderCreatedAt = Math.min(...orders.map(o => new Date(o.createdAt).getTime()));
+      const oldestOrderCreatedAt = Math.min(
+        ...orders.map((o) => new Date(o.createdAt).getTime()),
+      );
       const lastTxnTime = this.providerLastTxnTime.get(provider.id);
-      const fromTimeMs = lastTxnTime ? lastTxnTime - 60000 : oldestOrderCreatedAt - 5 * 60000;
-      const safeFromTimeMs = Math.max(fromTimeMs, now.getTime() - 24 * 60 * 60 * 1000);
+      const fromTimeMs = lastTxnTime
+        ? lastTxnTime - 60000
+        : oldestOrderCreatedAt - 5 * 60000;
+      const safeFromTimeMs = Math.max(
+        fromTimeMs,
+        now.getTime() - 24 * 60 * 60 * 1000,
+      );
       const fromDate = new Date(safeFromTimeMs);
 
       const response = await this.paytmService.fetchTransactionHistory(
@@ -335,7 +367,6 @@ export class OrderStatusCronService {
       for (const order of orders) {
         const orderAmount = Number(order.amount);
         const matchingTxn = response.transactions.find((txn: any) => {
-
           let txnAmount = 0;
           if (txn.payMoneyAmount?.value) {
             txnAmount = parseFloat(txn.payMoneyAmount.value) / 100;
@@ -350,12 +381,13 @@ export class OrderStatusCronService {
           const bizOrderId =
             txn.bizOrderId || txn.orderId || txn.merchantOrderId || "";
 
-          const payerPSP = txn.additionalInfo?.payerPSP
+          const payerPSP = txn.additionalInfo?.payerPSP;
           let merchantTransId = "";
           if (payerPSP.toLowerCase() === "phonepe") {
             merchantTransId = txn.additionalInfo.comment || "";
             // console.log("if comment info ", txn.additionalInfo.comment);
-            let withoutUnderscoreOrderExternalId = order.externalOrderId.replace(/_/g, "");
+            let withoutUnderscoreOrderExternalId =
+              order.externalOrderId.replace(/_/g, "");
 
             // console.log("out order info ", order.externalOrderId, " - ", withoutUnderscoreOrderExternalId);
             // console.log("out bizOrderId info ", bizOrderId);
@@ -367,7 +399,6 @@ export class OrderStatusCronService {
               merchantTransId.includes(withoutUnderscoreOrderExternalId) ||
               merchantTransId === withoutUnderscoreOrderExternalId
             );
-
           } else {
             merchantTransId = txn.merchantTransId || "";
             // console.log("else merchantTransId info ", txn.merchantTransId);
@@ -400,7 +431,9 @@ export class OrderStatusCronService {
     config: any,
   ) {
     try {
-      this.logger.log(`[Order Status Debug] Starting checkPhonePeOrdersForMerchant for merchant ${provider.merchantId} with ${orders.length} orders`);
+      this.logger.log(
+        `[Order Status Debug] Starting checkPhonePeOrdersForMerchant for merchant ${provider.merchantId} with ${orders.length} orders`,
+      );
 
       const token = config.credentials?.token || config.token;
       const deviceFingerprint = config.deviceFingerprint;
@@ -415,19 +448,27 @@ export class OrderStatusCronService {
       const method =
         config.credentials?.method || config.method || config.authMethod;
 
-      const isWebApi = (method || '').toLowerCase() === 'web-api';
+      const isWebApi = (method || "").toLowerCase() === "web-api";
 
       if (!token || (!deviceFingerprint && !fingerprint)) {
-        this.logger.log(`[Order Status Debug] Skipping PhonePe check for ${provider.merchantId}: no token or fingerprint (token=${!!token}, deviceFingerprint=${!!deviceFingerprint}, fingerprint=${!!fingerprint}, method=${method})`);
+        this.logger.log(
+          `[Order Status Debug] Skipping PhonePe check for ${provider.merchantId}: no token or fingerprint (token=${!!token}, deviceFingerprint=${!!deviceFingerprint}, fingerprint=${!!fingerprint}, method=${method})`,
+        );
         return;
       }
 
-      const oldestOrderCreatedAt = Math.min(...orders.map(o => new Date(o.createdAt).getTime()));
+      const oldestOrderCreatedAt = Math.min(
+        ...orders.map((o) => new Date(o.createdAt).getTime()),
+      );
       const lastTxnTime = this.providerLastTxnTime.get(provider.id);
-      const fromTimeMs = lastTxnTime ? lastTxnTime - 60000 : oldestOrderCreatedAt - 5 * 60000;
+      const fromTimeMs = lastTxnTime
+        ? lastTxnTime - 60000
+        : oldestOrderCreatedAt - 5 * 60000;
       const fromDate = new Date(fromTimeMs);
 
-      this.logger.log(`[Order Status Debug] Fetching PhonePe txns for ${provider.merchantId} (method=${method}, isWebApi=${isWebApi}, from=${fromDate.toISOString()})`);
+      this.logger.log(
+        `[Order Status Debug] Fetching PhonePe txns for ${provider.merchantId} (method=${method}, isWebApi=${isWebApi}, from=${fromDate.toISOString()})`,
+      );
 
       // Web-API providers share a persistent browser with other crons.
       // Wrap with a timeout to prevent pile-up when the browser is busy.
@@ -453,15 +494,27 @@ export class OrderStatusCronService {
         response = await Promise.race([
           fetchPromise,
           new Promise((_, reject) =>
-            setTimeout(() => reject(new Error(`OrderStatusCron: PhonePe fetch timed out after ${timeoutMs}ms (browser likely busy)`)), timeoutMs),
+            setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    `OrderStatusCron: PhonePe fetch timed out after ${timeoutMs}ms (browser likely busy)`,
+                  ),
+                ),
+              timeoutMs,
+            ),
           ),
         ]);
       } catch (timeoutErr: any) {
-        this.logger.warn(`⏱️ [Order Status] PhonePe fetch timed out for ${provider.merchantId}: ${timeoutErr.message}`);
+        this.logger.warn(
+          `⏱️ [Order Status] PhonePe fetch timed out for ${provider.merchantId}: ${timeoutErr.message}`,
+        );
         return;
       }
 
-      this.logger.log(`[Order Status Debug] PhonePe fetch txns for ${provider.merchantId} returned success=${!response?.sessionExpired}, results=${response?.data?.results?.length || response?.results?.length || 0}`);
+      this.logger.log(
+        `[Order Status Debug] PhonePe fetch txns for ${provider.merchantId} returned success=${!response?.sessionExpired}, results=${response?.data?.results?.length || response?.results?.length || 0}`,
+      );
 
       if (response?.sessionExpired) {
         try {
@@ -477,21 +530,30 @@ export class OrderStatusCronService {
           const latestCookies = String(
             response?.cookiesString || config.cookiesString || "",
           );
-          const latestCsrf = String(response?.csrfToken || config.csrfToken || "");
+          const latestCsrf = String(
+            response?.csrfToken || config.csrfToken || "",
+          );
           const signals = getPhonePeSessionSignals(latestCookies, latestCsrf);
 
           // 412/401 bursts can be transient for web-api even with intact session cookies.
           // Do not mark EXPIRED while core auth signals are still present.
           const currentHits = Number(config.webSessionExpiredHits || 0);
           const nextHits = currentHits + 1;
-          const sessionExpiredLimit = Number(process.env.PHONEPE_WEB_SESSION_EXPIRED_LIMIT || 3); // Reduced from 10 to 3
+          const sessionExpiredLimit = Number(
+            process.env.PHONEPE_WEB_SESSION_EXPIRED_LIMIT || 3,
+          ); // Reduced from 10 to 3
           const expireNow = nextHits >= sessionExpiredLimit;
 
-          if (isWebApi && shouldTreatAsTransientPhonePeSessionDrift(signals) && !expireNow) {
-            const latestProvider = await this.prisma.merchantProvider.findUnique({
-              where: { id: provider.id },
-              select: { credentials: true },
-            });
+          if (
+            isWebApi &&
+            shouldTreatAsTransientPhonePeSessionDrift(signals) &&
+            !expireNow
+          ) {
+            const latestProvider =
+              await this.prisma.merchantProvider.findUnique({
+                where: { id: provider.id },
+                select: { credentials: true },
+              });
             const latestCreds = (latestProvider?.credentials as any) || config;
 
             await this.prisma.merchantProvider.update({
@@ -502,11 +564,18 @@ export class OrderStatusCronService {
                   ...latestCreds,
                   webSessionExpiredHits: nextHits,
                   csrfToken: response?.csrfToken || latestCreds.csrfToken,
-                  cookiesString: response?.cookiesString || latestCreds.cookiesString,
+                  cookiesString:
+                    response?.cookiesString || latestCreds.cookiesString,
                   credentials: {
                     ...(latestCreds.credentials || {}),
-                    csrfToken: response?.csrfToken || latestCreds.credentials?.csrfToken || latestCreds.csrfToken,
-                    cookiesString: response?.cookiesString || latestCreds.credentials?.cookiesString || latestCreds.cookiesString,
+                    csrfToken:
+                      response?.csrfToken ||
+                      latestCreds.credentials?.csrfToken ||
+                      latestCreds.csrfToken,
+                    cookiesString:
+                      response?.cookiesString ||
+                      latestCreds.credentials?.cookiesString ||
+                      latestCreds.cookiesString,
                   },
                 },
               },
@@ -595,20 +664,28 @@ export class OrderStatusCronService {
         try {
           const latestProvider = await this.prisma.merchantProvider.findUnique({
             where: { id: provider.id },
-            select: { credentials: true }
+            select: { credentials: true },
           });
           const latestCreds: any = latestProvider?.credentials || config;
 
-          const dbChangedAuth = latestCreds.token !== config.token || latestCreds.refreshToken !== config.refreshToken;
+          const dbChangedAuth =
+            latestCreds.token !== config.token ||
+            latestCreds.refreshToken !== config.refreshToken;
 
           const newToken = response.refreshedToken || latestCreds.token;
-          const newRefreshToken = response.refreshedRefreshToken || latestCreds.refreshToken;
+          const newRefreshToken =
+            response.refreshedRefreshToken || latestCreds.refreshToken;
           const newCsrfToken = response.csrfToken || latestCreds.csrfToken;
 
           let newCookiesString = latestCreds.cookiesString;
           if (response.refreshedToken || response.refreshedRefreshToken) {
-            newCookiesString = response.cookiesString || latestCreds.cookiesString;
-          } else if (!dbChangedAuth && response.cookiesString && response.cookiesString !== config.cookiesString) {
+            newCookiesString =
+              response.cookiesString || latestCreds.cookiesString;
+          } else if (
+            !dbChangedAuth &&
+            response.cookiesString &&
+            response.cookiesString !== config.cookiesString
+          ) {
             newCookiesString = response.cookiesString;
           }
 
@@ -658,7 +735,9 @@ export class OrderStatusCronService {
         }
       }
 
-      this.logger.log(`[Order Status Debug] Checking ${orders.length} orders against ${results.length} PhonePe txns for merchant ${provider.merchantId}`);
+      this.logger.log(
+        `[Order Status Debug] Checking ${orders.length} orders against ${results.length} PhonePe txns for merchant ${provider.merchantId}`,
+      );
 
       if (results.length === 0) return;
 
@@ -674,7 +753,10 @@ export class OrderStatusCronService {
 
           const merchantTxnId = txn.merchantTransactionId || "";
           const txnNote = txn.transactionNote || "";
-          const sanitizedOrderId = order.externalOrderId.replace(/[^a-zA-Z0-9]/g, "");
+          const sanitizedOrderId = order.externalOrderId.replace(
+            /[^a-zA-Z0-9]/g,
+            "",
+          );
           return (
             merchantTxnId.includes(order.externalOrderId) ||
             merchantTxnId === order.externalOrderId ||
@@ -689,7 +771,11 @@ export class OrderStatusCronService {
           this.logger.log(
             `🎯 Found matching PhonePe transaction for order ${order.externalOrderId}`,
           );
-          await this.handlePhonePeTransactionMatch(order, matchingTxn, provider);
+          await this.handlePhonePeTransactionMatch(
+            order,
+            matchingTxn,
+            provider,
+          );
         }
       }
     } catch (error) {
@@ -738,7 +824,9 @@ export class OrderStatusCronService {
       });
 
       if (success) {
-        this.logger.log(`🎉 Order ${order.externalOrderId} completed via Paytm!`);
+        this.logger.log(
+          `🎉 Order ${order.externalOrderId} completed via Paytm!`,
+        );
       }
     }
   }
@@ -791,10 +879,17 @@ export class OrderStatusCronService {
       if (!accessToken || !merchantId) return;
 
       const now = new Date();
-      const oldestOrderCreatedAt = Math.min(...orders.map(o => new Date(o.createdAt).getTime()));
+      const oldestOrderCreatedAt = Math.min(
+        ...orders.map((o) => new Date(o.createdAt).getTime()),
+      );
       const lastTxnTime = this.providerLastTxnTime.get(provider.id);
-      const fromTimeMs = lastTxnTime ? lastTxnTime - 60000 : oldestOrderCreatedAt - 5 * 60000;
-      const safeFromTimeMs = Math.max(fromTimeMs, now.getTime() - 24 * 60 * 60 * 1000);
+      const fromTimeMs = lastTxnTime
+        ? lastTxnTime - 60000
+        : oldestOrderCreatedAt - 5 * 60000;
+      const safeFromTimeMs = Math.max(
+        fromTimeMs,
+        now.getTime() - 24 * 60 * 60 * 1000,
+      );
       const fromDate = new Date(safeFromTimeMs);
 
       const response = await this.bharatpeService.fetchTransactionHistory(
@@ -836,7 +931,11 @@ export class OrderStatusCronService {
       if (results.length > 0) {
         let maxTime = 0;
         for (const txn of results) {
-          const raw = txn.paymentTimestamp ?? txn.transactionDate ?? txn.paymentDate ?? txn.createdAt;
+          const raw =
+            txn.paymentTimestamp ??
+            txn.transactionDate ??
+            txn.paymentDate ??
+            txn.createdAt;
           if (raw) {
             let tTime = raw;
             if (typeof raw === "number") tTime = raw < 1e12 ? raw * 1000 : raw;
@@ -850,8 +949,9 @@ export class OrderStatusCronService {
         if (maxTime > 0) this.providerLastTxnTime.set(provider.id, maxTime);
       }
 
-      this.logger.log(`📋 Found ${results.length} BharatPe txns for merchant ${merchantId} (${orders.length} orders)`);
-
+      this.logger.log(
+        `📋 Found ${results.length} BharatPe txns for merchant ${merchantId} (${orders.length} orders)`,
+      );
 
       const getBharatPeTxnTimeMs = (txn: any): number | null => {
         const raw =
@@ -860,8 +960,7 @@ export class OrderStatusCronService {
           txn.paymentDate ??
           txn.createdAt;
         if (raw == null) return null;
-        if (typeof raw === "number")
-          return raw < 1e12 ? raw * 1000 : raw;
+        if (typeof raw === "number") return raw < 1e12 ? raw * 1000 : raw;
         const parsed = new Date(raw).getTime();
         return Number.isNaN(parsed) ? null : parsed;
       };
@@ -878,74 +977,83 @@ export class OrderStatusCronService {
       const paymentServiceUrl = process.env.PAYMENT_SERVICE_URL;
       const fiveMinutes = 5 * 60 * 1000;
 
-      await Promise.all(orders.map(async (order) => {
-        const orderCreatedAt = new Date(order.createdAt).getTime();
-        const orderAmount = Number(order.amount);
+      await Promise.all(
+        orders.map(async (order) => {
+          const orderCreatedAt = new Date(order.createdAt).getTime();
+          const orderAmount = Number(order.amount);
 
-        const potentialMatches = results.filter((txn: any) => {
-          if (txn.status !== "SUCCESS") return false;
+          const potentialMatches = results.filter((txn: any) => {
+            if (txn.status !== "SUCCESS") return false;
 
-          if (txn.merchantId && txn.merchantId !== merchantId) return false;
-          if (
-            expectedPayeeIdentifier &&
-            typeof txn.payeeIdentifier === "string"
-          ) {
-            if (txn.payeeIdentifier.toLowerCase() !== expectedPayeeIdentifier)
+            if (txn.merchantId && txn.merchantId !== merchantId) return false;
+            if (
+              expectedPayeeIdentifier &&
+              typeof txn.payeeIdentifier === "string"
+            ) {
+              if (txn.payeeIdentifier.toLowerCase() !== expectedPayeeIdentifier)
+                return false;
+            }
+            if (Number(txn.amount) !== orderAmount) return false;
+            const txnTimeMs = getBharatPeTxnTimeMs(txn);
+            if (txnTimeMs == null) return false;
+            if (
+              txnTimeMs < orderCreatedAt ||
+              txnTimeMs > orderCreatedAt + fiveMinutes
+            )
               return false;
-          }
-          if (Number(txn.amount) !== orderAmount) return false;
-          const txnTimeMs = getBharatPeTxnTimeMs(txn);
-          if (txnTimeMs == null) return false;
-          if (
-            txnTimeMs < orderCreatedAt ||
-            txnTimeMs > orderCreatedAt + fiveMinutes
-          )
-            return false;
-          return true;
-        });
+            return true;
+          });
 
-        for (const txn of potentialMatches) {
-          const txnIdStr = String(txn.id);
-          if (this.processedTransactionIds.has(txnIdStr)) continue;
+          for (const txn of potentialMatches) {
+            const txnIdStr = String(txn.id);
+            if (this.processedTransactionIds.has(txnIdStr)) continue;
 
-          try {
-            const existingTxnResponse = await axios.get(
-              `${paymentServiceUrl}/transactions?externalTransactionId=${txnIdStr}`,
-              { timeout: 5000,
-                  headers: { "x-internal-token": process.env.INTERNAL_TOKEN }
-            },
-            );
-            const existingTxns = existingTxnResponse.data?.transactions || [];
+            try {
+              const existingTxnResponse = await axios.get(
+                `${paymentServiceUrl}/transactions?externalTransactionId=${txnIdStr}`,
+                {
+                  timeout: 5000,
+                  headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": "platform-org-id" },
+                },
+              );
+              const existingTxns = existingTxnResponse.data?.transactions || [];
 
-            if (existingTxns.length > 0) {
-              this.processedTransactionIds.add(txnIdStr);
-              if (this.processedTransactionIds.size > 10000) this.processedTransactionIds.clear();
+              if (existingTxns.length > 0) {
+                this.processedTransactionIds.add(txnIdStr);
+                if (this.processedTransactionIds.size > 10000)
+                  this.processedTransactionIds.clear();
 
-              const existingTxn = existingTxns[0];
-              if (existingTxn.orderId) {
-                if (existingTxn.orderId !== order.id) continue;
-                return;
+                const existingTxn = existingTxns[0];
+                if (existingTxn.orderId) {
+                  if (existingTxn.orderId !== order.id) continue;
+                  return;
+                }
               }
-            }
 
-            this.logger.log(
-              `🎯 Found matching BharatPe transaction for order ${order.externalOrderId}: ₹${txn.amount} from ${txn.payerName}`,
-            );
-            const success = await this.handleBharatPeTransactionMatch(order, txn, provider);
-            
-            if (success) {
-              this.processedTransactionIds.add(txnIdStr);
-              if (this.processedTransactionIds.size > 10000) this.processedTransactionIds.clear();
+              this.logger.log(
+                `🎯 Found matching BharatPe transaction for order ${order.externalOrderId}: ₹${txn.amount} from ${txn.payerName}`,
+              );
+              const success = await this.handleBharatPeTransactionMatch(
+                order,
+                txn,
+                provider,
+              );
+
+              if (success) {
+                this.processedTransactionIds.add(txnIdStr);
+                if (this.processedTransactionIds.size > 10000)
+                  this.processedTransactionIds.clear();
+              }
+
+              break;
+            } catch (checkError) {
+              this.logger.warn(
+                `Could not verify BharatPe txn ${txn.id}: ${checkError.message}`,
+              );
             }
-            
-            break;
-          } catch (checkError) {
-            this.logger.warn(
-              `Could not verify BharatPe txn ${txn.id}: ${checkError.message}`,
-            );
           }
-        }
-      }));
+        }),
+      );
     } catch (error) {
       this.logger.error(
         `BharatPe check failed for merchant ${provider.merchantId}: ${error.message}`,
@@ -998,7 +1106,9 @@ export class OrderStatusCronService {
       const timeSinceLastSync = Date.now() - lastSync;
 
       if (timeSinceLastSync < 25_000) {
-        this.logger.log(`⏭️ GPay sync for ${provider.id} ran ${Math.round(timeSinceLastSync / 1000)}s ago, skipping this tick`);
+        this.logger.log(
+          `⏭️ GPay sync for ${provider.id} ran ${Math.round(timeSinceLastSync / 1000)}s ago, skipping this tick`,
+        );
         return;
       }
     }
@@ -1027,23 +1137,39 @@ export class OrderStatusCronService {
       let results: any[] = [];
       if (response && response.transactions) {
         // Log the raw data received from GPay API for debugging
-        this.logger.log(`[GPay Raw API Data] Received ${response.transactions.length} records. First record: ${JSON.stringify(response.transactions[0] || null)}`);
+        if (response.transactions.length > 0) {
+          this.logger.log(
+            `[GPay Raw API Data] Received ${response.transactions.length} records. First record: ${JSON.stringify(response.transactions[0])}`,
+          );
+        } else {
+          this.logger.log(
+            `[GPay Raw API Data] Received 0 records from GPay live buffer.`,
+          );
+        }
 
         results = response.transactions.map((record: any) => {
           // Check if record is the raw array from GPay
-          if (Array.isArray(record) || (Array.isArray(record[0]) && record[0].length > 3)) {
-            const r = Array.isArray(record[0]) && record[0].length > 3 ? record[0] : record;
+          if (
+            Array.isArray(record) ||
+            (Array.isArray(record[0]) && record[0].length > 3)
+          ) {
+            const r =
+              Array.isArray(record[0]) && record[0].length > 3
+                ? record[0]
+                : record;
             return {
               txnId: String(r[0]),
               utr: r[1] ? String(r[1]) : null,
               timestamp: Array.isArray(r[2])
-                ? new Date(r[2][0] * 1000 + Math.floor((r[2][1] || 0) / 1_000_000))
+                ? new Date(
+                  r[2][0] * 1000 + Math.floor((r[2][1] || 0) / 1_000_000),
+                )
                 : new Date(),
               amount: Array.isArray(r[3]) ? Number(r[3][1]) : 0,
               customerName: Array.isArray(r[8]) ? r[8][0] : null,
               customerVpa: Array.isArray(r[8]) ? r[8][1] : null,
-              status: (r[5] === 3 || r[5] === 4) ? 'COMPLETED' : 'PENDING',
-              note: typeof r[9] === 'string' ? r[9] : null,
+              status: r[5] === 3 || r[5] === 4 ? "COMPLETED" : "PENDING",
+              note: typeof r[9] === "string" ? r[9] : null,
             };
           }
           return record;
@@ -1055,14 +1181,18 @@ export class OrderStatusCronService {
       const getTxnTimeMs = (record: any): number => {
         if (!record || !record.timestamp) return 0;
         if (record.timestamp instanceof Date) return record.timestamp.getTime();
-        if (typeof record.timestamp === "string" || typeof record.timestamp === "number") {
+        if (
+          typeof record.timestamp === "string" ||
+          typeof record.timestamp === "number"
+        ) {
           return new Date(record.timestamp).getTime();
         }
         return 0;
       };
 
-      orders.sort((a, b) =>
-        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      orders.sort(
+        (a, b) =>
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
       );
 
       results.sort((a: any, b: any) => {
@@ -1077,7 +1207,8 @@ export class OrderStatusCronService {
       const matchWindowMs = 5 * 60 * 1000; // 5 minute window
       const usedTxnIds = new Set<string>();
 
-      const normalizeRef = (ref: string) => ref.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+      const normalizeRef = (ref: string) =>
+        ref.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
 
       let needsDashboardRefresh = false;
 
@@ -1095,7 +1226,7 @@ export class OrderStatusCronService {
           const externalTxnId = String(txn.txnId);
 
           if (usedTxnIds.has(externalTxnId)) continue;
-          if (txn.status !== 'COMPLETED') continue;
+          if (txn.status !== "COMPLETED") continue;
 
           const txnAmount = Number(txn.amount);
           if (txnAmount !== orderAmount) continue;
@@ -1109,12 +1240,16 @@ export class OrderStatusCronService {
             // No note (yuZqtb push) — only match by time if this is the ONLY pending order with this amount
             // Otherwise, we risk matching the wrong order. The dashboard cron (with notes) will handle it within 25s.
             const sameAmountOrders = orders.filter(
-              (o: any) => Number(o.amount) === txnAmount && !this.processingOrders.has(o.id)
+              (o: any) =>
+                Number(o.amount) === txnAmount &&
+                !this.processingOrders.has(o.id),
             );
             if (sameAmountOrders.length === 1) {
               const txnTimeMs = getTxnTimeMs(txn);
               if (txnTimeMs !== 0) {
-                const isTimeMatch = txnTimeMs >= (orderCreatedAt - 60000) && txnTimeMs <= (orderCreatedAt + matchWindowMs);
+                const isTimeMatch =
+                  txnTimeMs >= orderCreatedAt - 60000 &&
+                  txnTimeMs <= orderCreatedAt + matchWindowMs;
                 if (isTimeMatch) {
                   isMatch = true;
                 }
@@ -1135,17 +1270,18 @@ export class OrderStatusCronService {
           if (isMatch) {
             // Claim it SYNCHRONOUSLY to prevent race conditions during the DB check
             usedTxnIds.add(externalTxnId);
-            
+
             if (this.processedTransactionIds.has(externalTxnId)) {
-               continue;
+              continue;
             }
 
             // Risk 2: Collision prevention (DB level)
             try {
               const existingTxnResponse = await axios.get(
                 `${paymentServiceUrl}/transactions?externalTransactionId=${externalTxnId}`,
-                { timeout: 5000,
-                    headers: { "x-internal-token": process.env.INTERNAL_TOKEN }
+                {
+                  timeout: 5000,
+                  headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": "platform-org-id" },
                 },
               );
               const existingTxns = existingTxnResponse.data?.transactions || [];
@@ -1153,7 +1289,8 @@ export class OrderStatusCronService {
               if (existingTxns.length > 0 && existingTxns[0].orderId) {
                 // Linked already, keep it in usedTxnIds, skip this transaction and KEEP SEARCHING!
                 this.processedTransactionIds.add(externalTxnId);
-                if (this.processedTransactionIds.size > 10000) this.processedTransactionIds.clear();
+                if (this.processedTransactionIds.size > 10000)
+                  this.processedTransactionIds.clear();
                 continue;
               } else {
                 // Valid unlinked match!
@@ -1161,7 +1298,9 @@ export class OrderStatusCronService {
                 break;
               }
             } catch (e: any) {
-              this.logger.warn(`Failed to verify GPay txn existence: ${e.message}`);
+              this.logger.warn(
+                `Failed to verify GPay txn existence: ${e.message}`,
+              );
               // Fallback: assume it's good if DB check fails
               matchingTxn = txn;
               break;
@@ -1178,7 +1317,7 @@ export class OrderStatusCronService {
           usedTxnIds.add(externalTxnId);
 
           this.logger.log(
-            `🎯 Found matching GPay transaction for order ${order.externalOrderId}: ₹${order.amount} (GPay ID: ${externalTxnId}, UTR: ${utr || 'N/A'})`,
+            `🎯 Found matching GPay transaction for order ${order.externalOrderId}: ₹${order.amount} (GPay ID: ${externalTxnId}, UTR: ${utr || "N/A"})`,
           );
 
           const success = await this.syncTransactionAndCompleteOrder(order, {
@@ -1197,10 +1336,11 @@ export class OrderStatusCronService {
             merchantId: order.merchantId,
             orderId: order.id,
           });
-          
+
           if (success) {
             this.processedTransactionIds.add(externalTxnId);
-            if (this.processedTransactionIds.size > 10000) this.processedTransactionIds.clear();
+            if (this.processedTransactionIds.size > 10000)
+              this.processedTransactionIds.clear();
           }
         }
       }
@@ -1209,11 +1349,15 @@ export class OrderStatusCronService {
         const lastRefresh = this.lastForcedRefreshTime.get(provider.id) || 0;
         const cooldownMs = 60_000; // Only force-refresh once per 60 seconds per provider
         if (Date.now() - lastRefresh > cooldownMs) {
-          this.logger.log(`🔄 Triggering forced dashboard refresh for provider ${provider.id} due to ambiguous transactions without notes.`);
+          this.logger.log(
+            `🔄 Triggering forced dashboard refresh for provider ${provider.id} due to ambiguous transactions without notes.`,
+          );
           this.lastForcedRefreshTime.set(provider.id, Date.now());
           // Run it in the background so we don't block the cron
-          this.gpayService.forceDashboardRefresh(provider.id).catch(e => {
-            this.logger.warn(`Failed to trigger dashboard refresh: ${e?.message}`);
+          this.gpayService.forceDashboardRefresh(provider.id).catch((e) => {
+            this.logger.warn(
+              `Failed to trigger dashboard refresh: ${e?.message}`,
+            );
           });
         }
       }
@@ -1224,7 +1368,10 @@ export class OrderStatusCronService {
     }
   }
 
-  private async syncTransactionAndCompleteOrder(order: any, txnData: any): Promise<boolean> {
+  private async syncTransactionAndCompleteOrder(
+    order: any,
+    txnData: any,
+  ): Promise<boolean> {
     const orderId = order.id;
 
     if (this.processingOrders.has(orderId)) {
@@ -1235,7 +1382,9 @@ export class OrderStatusCronService {
     }
 
     if (Math.abs(Number(order.amount) - Number(txnData.amount)) > 0.01) {
-      this.logger.error(`🚨 FATAL: AMOUNT MISMATCH in syncTransactionAndCompleteOrder: Order ${order.externalOrderId} requested ₹${order.amount}, but transaction was ₹${txnData.amount}. Preventing completion!`);
+      this.logger.error(
+        `🚨 FATAL: AMOUNT MISMATCH in syncTransactionAndCompleteOrder: Order ${order.externalOrderId} requested ₹${order.amount}, but transaction was ₹${txnData.amount}. Preventing completion!`,
+      );
       return false;
     }
 
@@ -1249,8 +1398,8 @@ export class OrderStatusCronService {
           `${paymentServiceUrl}/orders/${order.id}`,
           {
             timeout: 5000,
-              headers: { "x-internal-token": process.env.INTERNAL_TOKEN }
-        },
+            headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": "platform-org-id" },
+          },
         );
         if (orderCheck.data?.order?.status === "COMPLETED") {
           this.logger.log(
@@ -1259,22 +1408,26 @@ export class OrderStatusCronService {
           return true;
         }
       } catch (checkError) {
-        this.logger.warn(
-          `Order status check failed: ${checkError.message}`,
-        );
+        this.logger.warn(`Order status check failed: ${checkError.message}`);
       }
 
       // 1. Sync the transaction
-      const syncResponse = await axios.post(`${paymentServiceUrl}/transactions/sync`, {
-        ...txnData,
-        status: txnData.status === "COMPLETED" ? "SUCCESS" : txnData.status
-      }, {
-        timeout: 10000,
-          headers: { "x-internal-token": process.env.INTERNAL_TOKEN }
-    });
+      const syncResponse = await axios.post(
+        `${paymentServiceUrl}/transactions/sync`,
+        {
+          ...txnData,
+          status: txnData.status === "COMPLETED" ? "SUCCESS" : txnData.status,
+        },
+        {
+          timeout: 10000,
+          headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": "platform-org-id" },
+        },
+      );
 
       if (!syncResponse.data?.success) {
-        this.logger.error(`Failed to sync transaction via API: ${syncResponse.data?.error || 'Unknown error'}`);
+        this.logger.error(
+          `Failed to sync transaction via API: ${syncResponse.data?.error || "Unknown error"}`,
+        );
         return false;
       }
 
@@ -1283,11 +1436,11 @@ export class OrderStatusCronService {
         `${paymentServiceUrl}/orders/${order.id}/status`,
         {
           status: "COMPLETED",
-          utr: txnData.utr // Persist the UTR on the order
+          utr: txnData.utr, // Persist the UTR on the order
         },
         {
           timeout: 10000,
-            headers: { "x-internal-token": process.env.INTERNAL_TOKEN }
+          headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": "platform-org-id" },
         },
       );
 
@@ -1304,7 +1457,7 @@ export class OrderStatusCronService {
           `Failed to update merchant usage for ${order.merchantId}: ${usageError.message}`,
         );
       }
-      
+
       return true;
     } catch (error) {
       this.logger.error(
@@ -1326,10 +1479,17 @@ export class OrderStatusCronService {
       if (!accessToken) return;
 
       const now = new Date();
-      const oldestOrderCreatedAt = Math.min(...orders.map(o => new Date(o.createdAt).getTime()));
+      const oldestOrderCreatedAt = Math.min(
+        ...orders.map((o) => new Date(o.createdAt).getTime()),
+      );
       const lastTxnTime = this.providerLastTxnTime.get(provider.id);
-      const fromTimeMs = lastTxnTime ? lastTxnTime - 60000 : oldestOrderCreatedAt - 5 * 60000;
-      const safeFromTimeMs = Math.max(fromTimeMs, now.getTime() - 24 * 60 * 60 * 1000);
+      const fromTimeMs = lastTxnTime
+        ? lastTxnTime - 60000
+        : oldestOrderCreatedAt - 5 * 60000;
+      const safeFromTimeMs = Math.max(
+        fromTimeMs,
+        now.getTime() - 24 * 60 * 60 * 1000,
+      );
       const fromDate = new Date(safeFromTimeMs);
 
       const response = await this.quintuspayService.fetchTransactionHistory(
@@ -1356,7 +1516,11 @@ export class OrderStatusCronService {
       if (results.length > 0) {
         let maxTime = 0;
         for (const txn of results) {
-          const rawTs = txn.created_at || txn.description?.transactionTimestamp || txn.createdAt || txn.updatedAt;
+          const rawTs =
+            txn.created_at ||
+            txn.description?.transactionTimestamp ||
+            txn.createdAt ||
+            txn.updatedAt;
           if (rawTs) {
             const ms = new Date(rawTs).getTime();
             if (ms > maxTime) maxTime = ms;
@@ -1368,88 +1532,116 @@ export class OrderStatusCronService {
       this.logger.log(
         `📋 Found ${results.length} QuintusPay txns for merchant ${provider.merchantId} (${orders.length} orders)`,
       );
-      this.logger.log(`[DEBUG] Full QuintusPay response: ${JSON.stringify(results, null, 2)}`);
+      this.logger.log(
+        `[DEBUG] Full QuintusPay response: ${JSON.stringify(results, null, 2)}`,
+      );
 
-      await Promise.all(orders.map(async (order) => {
-        this.logger.log(`[DEBUG] Checking order ${order.externalOrderId} with amount ${order.amount}`);
-        const orderAmount = Number(order.amount);
-        const orderCreatedAt = new Date(order.createdAt).getTime();
-        const fiveMinutes = 5 * 60 * 1000;
+      await Promise.all(
+        orders.map(async (order) => {
+          this.logger.log(
+            `[DEBUG] Checking order ${order.externalOrderId} with amount ${order.amount}`,
+          );
+          const orderAmount = Number(order.amount);
+          const orderCreatedAt = new Date(order.createdAt).getTime();
+          const fiveMinutes = 5 * 60 * 1000;
 
-        const potentialMatches = results.filter((txn: any) => {
-          if (txn.status !== "SUCCESS" && txn.status !== "PAID") return false;
-          if (Number(txn.amount) !== orderAmount) return false;
+          const potentialMatches = results.filter((txn: any) => {
+            if (txn.status !== "SUCCESS" && txn.status !== "PAID") return false;
+            if (Number(txn.amount) !== orderAmount) return false;
 
-          if (txn.description?.merchantRequestId) {
-            if (txn.description.merchantRequestId === order.externalOrderId || txn.description.merchantRequestId === order.id) {
-              return true; // Exact match, skip time window check
-            }
-          }
-
-          const rawTs = txn.created_at || txn.description?.transactionTimestamp || txn.createdAt || txn.updatedAt;
-          const txnTimeMs = rawTs ? new Date(rawTs).getTime() : null;
-
-          if (txnTimeMs == null) {
-            this.logger.log(`[DEBUG] Missing timestamp for txn ${txn._id}`);
-            return false;
-          }
-          if (
-            txnTimeMs < orderCreatedAt - 60 * 1000 || // 1 min buffer
-            txnTimeMs > orderCreatedAt + fiveMinutes
-          ) {
-            this.logger.log(`[DEBUG] Timestamp out of bounds for txn ${txn._id}: txnTimeMs=${txnTimeMs}, orderCreatedAt=${orderCreatedAt}`);
-            return false;
-          }
-
-          return true;
-        });
-
-        this.logger.log(`[DEBUG] Potential Matches for ${order.externalOrderId}: ${potentialMatches.length}`);
-
-        const paymentServiceUrl = process.env.PAYMENT_SERVICE_URL;
-
-        for (const txn of potentialMatches) {
-          const externalId = String(txn.referenceNo || txn._id || txn.description?.gatewayTransactionId);
-          if (this.processedTransactionIds.has(externalId)) continue;
-          
-          try {
-            const existingTxnResponse = await axios.get(
-              `${paymentServiceUrl}/transactions?externalTransactionId=${externalId}`,
-              { timeout: 5000,
-                  headers: { "x-internal-token": process.env.INTERNAL_TOKEN }
-            },
-            );
-            const existingTxns = existingTxnResponse.data?.transactions || [];
-
-            if (existingTxns.length > 0) {
-              this.processedTransactionIds.add(externalId);
-              if (this.processedTransactionIds.size > 10000) this.processedTransactionIds.clear();
-              
-              const existingTxn = existingTxns[0];
-              if (existingTxn.orderId) {
-                if (existingTxn.orderId !== order.id) continue;
-                return;
+            if (txn.description?.merchantRequestId) {
+              if (
+                txn.description.merchantRequestId === order.externalOrderId ||
+                txn.description.merchantRequestId === order.id
+              ) {
+                return true; // Exact match, skip time window check
               }
             }
 
-            this.logger.log(
-              `🎯 Found matching QuintusPay transaction for order ${order.externalOrderId}: ₹${txn.amount}`,
-            );
-            const success = await this.handleQuintusPayTransactionMatch(order, txn, provider);
-            
-            if (success) {
-              this.processedTransactionIds.add(externalId);
-              if (this.processedTransactionIds.size > 10000) this.processedTransactionIds.clear();
+            const rawTs =
+              txn.created_at ||
+              txn.description?.transactionTimestamp ||
+              txn.createdAt ||
+              txn.updatedAt;
+            const txnTimeMs = rawTs ? new Date(rawTs).getTime() : null;
+
+            if (txnTimeMs == null) {
+              this.logger.log(`[DEBUG] Missing timestamp for txn ${txn._id}`);
+              return false;
             }
-            
-            break;
-          } catch (checkError) {
-            this.logger.warn(
-              `Could not verify QuintusPay txn ${txn._id}: ${checkError.message}`,
+            if (
+              txnTimeMs < orderCreatedAt - 60 * 1000 || // 1 min buffer
+              txnTimeMs > orderCreatedAt + fiveMinutes
+            ) {
+              this.logger.log(
+                `[DEBUG] Timestamp out of bounds for txn ${txn._id}: txnTimeMs=${txnTimeMs}, orderCreatedAt=${orderCreatedAt}`,
+              );
+              return false;
+            }
+
+            return true;
+          });
+
+          this.logger.log(
+            `[DEBUG] Potential Matches for ${order.externalOrderId}: ${potentialMatches.length}`,
+          );
+
+          const paymentServiceUrl = process.env.PAYMENT_SERVICE_URL;
+
+          for (const txn of potentialMatches) {
+            const externalId = String(
+              txn.referenceNo ||
+              txn._id ||
+              txn.description?.gatewayTransactionId,
             );
+            if (this.processedTransactionIds.has(externalId)) continue;
+
+            try {
+              const existingTxnResponse = await axios.get(
+                `${paymentServiceUrl}/transactions?externalTransactionId=${externalId}`,
+                {
+                  timeout: 5000,
+                  headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": "platform-org-id" },
+                },
+              );
+              const existingTxns = existingTxnResponse.data?.transactions || [];
+
+              if (existingTxns.length > 0) {
+                this.processedTransactionIds.add(externalId);
+                if (this.processedTransactionIds.size > 10000)
+                  this.processedTransactionIds.clear();
+
+                const existingTxn = existingTxns[0];
+                if (existingTxn.orderId) {
+                  if (existingTxn.orderId !== order.id) continue;
+                  return;
+                }
+              }
+
+              this.logger.log(
+                `🎯 Found matching QuintusPay transaction for order ${order.externalOrderId}: ₹${txn.amount}`,
+              );
+              const success = await this.handleQuintusPayTransactionMatch(
+                order,
+                txn,
+                provider,
+              );
+
+              if (success) {
+                this.processedTransactionIds.add(externalId);
+                if (this.processedTransactionIds.size > 10000)
+                  this.processedTransactionIds.clear();
+              }
+
+              break;
+            } catch (checkError) {
+              this.logger.warn(
+                `Could not verify QuintusPay txn ${txn._id}: ${checkError.message}`,
+              );
+            }
           }
-        }
-      }));
+        }),
+      );
     } catch (error) {
       this.logger.error(
         `QuintusPay check failed for merchant ${provider.merchantId}: ${error.message}`,
@@ -1466,7 +1658,9 @@ export class OrderStatusCronService {
 
     if (txnStatus === "SUCCESS" || txnStatus === "PAID") {
       const amount = Number(txn.amount);
-      const externalId = String(txn.referenceNo || txn._id || txn.description?.gatewayTransactionId);
+      const externalId = String(
+        txn.referenceNo || txn._id || txn.description?.gatewayTransactionId,
+      );
 
       const success = await this.syncTransactionAndCompleteOrder(order, {
         externalTransactionId: externalId,
@@ -1486,7 +1680,9 @@ export class OrderStatusCronService {
       });
 
       if (success) {
-        this.logger.log(`🎉 Order ${order.externalOrderId} completed via QuintusPay!`);
+        this.logger.log(
+          `🎉 Order ${order.externalOrderId} completed via QuintusPay!`,
+        );
       }
       return success;
     }
@@ -1507,15 +1703,24 @@ export class OrderStatusCronService {
 
     const now = new Date();
     const lastReset = new Date(config.lastDailyReset);
-    const isNewDay =
-      now.getDate() !== lastReset.getDate() ||
-      now.getMonth() !== lastReset.getMonth() ||
-      now.getFullYear() !== lastReset.getFullYear();
+    // Use IST date comparison so the daily reset fires at midnight IST,
+    // matching the dashboard's getTodayISTRange() and preventing a 5h30m
+    // discrepancy between merchant Daily Used and dashboard Today totals.
+    const nowISTDate = now.toLocaleDateString("en-CA", {
+      timeZone: "Asia/Kolkata",
+    });
+    const lastResetISTDate = lastReset.toLocaleDateString("en-CA", {
+      timeZone: "Asia/Kolkata",
+    });
+    const isNewDay = nowISTDate !== lastResetISTDate;
 
     const lastMonthlyReset = new Date(config.lastMonthlyReset);
-    const isNewMonth =
-      now.getMonth() !== lastMonthlyReset.getMonth() ||
-      now.getFullYear() !== lastMonthlyReset.getFullYear();
+    const nowISTMonth = nowISTDate.slice(0, 7);
+    const lastMonthlyResetISTDate = lastMonthlyReset.toLocaleDateString(
+      "en-CA",
+      { timeZone: "Asia/Kolkata" },
+    );
+    const isNewMonth = nowISTMonth !== lastMonthlyResetISTDate.slice(0, 7);
 
     const updateData: any = {};
 
@@ -1611,20 +1816,26 @@ export class OrderStatusCronService {
     }
   }
 
-  private async checkHdfcOrdersForMerchant(orders: any[], provider: any, config: any) {
+  private async checkHdfcOrdersForMerchant(
+    orders: any[],
+    provider: any,
+    config: any,
+  ) {
     try {
       const sessionId = config.sessionId;
       const deviceId = config.deviceId;
 
       if (!sessionId || !deviceId) return;
 
-      const oldestOrderCreatedAt = Math.min(...orders.map(o => new Date(o.createdAt).getTime()));
+      const oldestOrderCreatedAt = Math.min(
+        ...orders.map((o) => new Date(o.createdAt).getTime()),
+      );
       // Look back 5 minutes from the oldest pending order
       const fromDate = new Date(oldestOrderCreatedAt - 5 * 60000);
       const toDate = new Date();
 
-      const startStr = fromDate.toISOString().split('T')[0];
-      const endStr = toDate.toISOString().split('T')[0];
+      const startStr = fromDate.toISOString().split("T")[0];
+      const endStr = toDate.toISOString().split("T")[0];
 
       const response = await this.hdfcService.fetchTransactionHistory(
         sessionId,
@@ -1635,7 +1846,9 @@ export class OrderStatusCronService {
 
       if (response.sessionExpired) {
         // Expiry logic is usually handled by HdfcKeepaliveCron, but we could mark EXPIRED here.
-        this.logger.warn(`HDFC session expired during OrderStatus check for provider ${provider.id}.`);
+        this.logger.warn(
+          `HDFC session expired during OrderStatus check for provider ${provider.id}.`,
+        );
         return;
       }
 
@@ -1651,19 +1864,29 @@ export class OrderStatusCronService {
           const txnAmount = Number(txn.amount);
           if (txnAmount !== orderAmount) return false;
 
-          const sanitizedOrderId = order.externalOrderId.replace(/[^a-zA-Z0-9]/g, "");
-          const stringifiedTxn = JSON.stringify(txn).replace(/[^a-zA-Z0-9]/g, "");
+          const sanitizedOrderId = order.externalOrderId.replace(
+            /[^a-zA-Z0-9]/g,
+            "",
+          );
+          const stringifiedTxn = JSON.stringify(txn).replace(
+            /[^a-zA-Z0-9]/g,
+            "",
+          );
 
           return stringifiedTxn.includes(sanitizedOrderId);
         });
 
         if (matchingTxn) {
-          this.logger.log(`🎯 Found matching HDFC transaction for order ${order.externalOrderId}`);
+          this.logger.log(
+            `🎯 Found matching HDFC transaction for order ${order.externalOrderId}`,
+          );
           await this.handleHdfcTransactionMatch(order, matchingTxn, provider);
         }
       }
     } catch (err: any) {
-      this.logger.error(`HDFC check failed for merchant ${provider.merchantId}: ${err.message}`);
+      this.logger.error(
+        `HDFC check failed for merchant ${provider.merchantId}: ${err.message}`,
+      );
     }
   }
 
@@ -1675,7 +1898,9 @@ export class OrderStatusCronService {
     const rawStatus = txn.status || txn.txnStatus || txn.transactionStatus;
     const txnStatus = (rawStatus || "SUCCESS").toString().toUpperCase();
 
-    this.logger.log(`[HDFC Debug] Match evaluated! rawStatus=${rawStatus}, txnStatus=${txnStatus}, txn=${JSON.stringify(txn)}`);
+    this.logger.log(
+      `[HDFC Debug] Match evaluated! rawStatus=${rawStatus}, txnStatus=${txnStatus}, txn=${JSON.stringify(txn)}`,
+    );
 
     if (
       txnStatus === "SUCCESS" ||
@@ -1684,25 +1909,40 @@ export class OrderStatusCronService {
       txnStatus === "SALESUCCESS" ||
       txnStatus === "APPROVED" ||
       txnStatus === "SETTLED" ||
-      !["FAILED", "DECLINED", "REJECTED", "REFUNDED", "REFUND"].includes(txnStatus)
+      !["FAILED", "DECLINED", "REJECTED", "REFUNDED", "REFUND"].includes(
+        txnStatus,
+      )
     ) {
-      const amount = Number(txn.amount || txn.txnAmount || txn.transactionAmount || order.amount);
+      const amount = Number(
+        txn.amount || txn.txnAmount || txn.transactionAmount || order.amount,
+      );
 
-      const dateStr = txn.txnDate || txn.transactionDate || txn.endTime || txn.sortTime;
+      const dateStr =
+        txn.txnDate || txn.transactionDate || txn.endTime || txn.sortTime;
       let parsedDate = new Date();
       if (dateStr) {
-        if (typeof dateStr === 'string' && dateStr.match(/^\d{2}-\d{2}-\d{4}/)) {
-          const parts = dateStr.split(' ');
-          const dateParts = parts[0].split('-');
-          const timePart = parts[1] || '00:00:00';
-          parsedDate = new Date(`${dateParts[2]}-${dateParts[1]}-${dateParts[0]}T${timePart}`);
+        if (
+          typeof dateStr === "string" &&
+          dateStr.match(/^\d{2}-\d{2}-\d{4}/)
+        ) {
+          const parts = dateStr.split(" ");
+          const dateParts = parts[0].split("-");
+          const timePart = parts[1] || "00:00:00";
+          parsedDate = new Date(
+            `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}T${timePart}`,
+          );
         } else {
           parsedDate = new Date(dateStr);
         }
       }
 
       const success = await this.syncTransactionAndCompleteOrder(order, {
-        externalTransactionId: txn.txnId || txn.transactionId || txn.rrn || txn.utr || `hdfc-${Date.now()}`,
+        externalTransactionId:
+          txn.txnId ||
+          txn.transactionId ||
+          txn.rrn ||
+          txn.utr ||
+          `hdfc-${Date.now()}`,
         amount: amount,
         currency: "INR",
         status: "SUCCESS",
@@ -1721,8 +1961,123 @@ export class OrderStatusCronService {
       });
 
       if (success) {
-        this.logger.log(`🎉 Order ${order.externalOrderId} completed via HDFC!`);
+        this.logger.log(
+          `🎉 Order ${order.externalOrderId} completed via HDFC!`,
+        );
       }
+    }
+  }
+
+  /**
+   * ── Daily-usage reconciliation ─────────────────────────────────────────────
+   * Runs every 5 minutes.
+   *
+   * The 15-second PENDING-order cron calls updateMerchantUsage() only when the
+   * cron ITSELF discovers and marks an order as COMPLETED.  When the payment
+   * service receives a direct bank/UPI webhook and marks an order COMPLETED
+   * first, the PENDING-order cron never sees it and never updates
+   * currentDailyAmount — causing the "Daily Used" on the Merchants page to lag
+   * behind the dashboard's "Today Receive Amount" (which reads the payment DB
+   * directly and is always accurate).
+   *
+   * This reconciliation cron re-queries the payment service for each active
+   * merchant's actual completed-order total for today (IST) and writes the
+   * authoritative value back to merchantConfig.currentDailyAmount.
+   */
+  @Cron("*/5 * * * *", { name: "reconcile-merchant-daily-usage" })
+  async reconcileMerchantDailyUsage() {
+    const paymentServiceUrl = process.env.PAYMENT_SERVICE_URL;
+    if (!paymentServiceUrl) return;
+
+    try {
+      // IST "today" window: midnight IST (UTC-18:30 previous day) to now
+      const nowUTC = new Date();
+      const ISTOffsetMs = 5.5 * 60 * 60 * 1000; // +05:30
+      const nowIST = new Date(nowUTC.getTime() + ISTOffsetMs);
+      const midnightIST = new Date(nowIST);
+      midnightIST.setUTCHours(0, 0, 0, 0);
+      const todayStartUTC = new Date(midnightIST.getTime() - ISTOffsetMs);
+      const fromDateStr = todayStartUTC
+        .toISOString()
+        .replace("T", " ")
+        .slice(0, 19);
+
+      // Fetch all merchant configs
+      const configs = await this.prisma.merchantConfig.findMany({
+        select: {
+          merchantId: true,
+          currentDailyAmount: true,
+          lastDailyReset: true,
+          dailyMaxAmount: true,
+        },
+      });
+
+      if (configs.length === 0) return;
+
+      this.logger.log(
+        `[DailyUsageReconcile] Checking ${configs.length} merchants (IST today >= ${fromDateStr} UTC)`,
+      );
+
+      // Today's date in IST (YYYY-MM-DD) — used as fromDate/toDate for the orders API
+      const todayISTStr = nowIST.toISOString().split("T")[0];
+
+      // Query payment service for each merchant's completed total today.
+      // Batched 10 at a time to avoid hammering the payment service.
+      const BATCH = 10;
+      for (let i = 0; i < configs.length; i += BATCH) {
+        const batch = configs.slice(i, i + BATCH);
+        await Promise.all(
+          batch.map(async (cfg) => {
+            try {
+              // GET /orders?merchantId=X&status=COMPLETED&fromDate=YYYY-MM-DD&toDate=YYYY-MM-DD&limit=1
+              // The payment service returns successAmount = SUM(amount) for COMPLETED orders
+              // in the IST date range, regardless of how many orders are returned.
+              const resp = await axios.get(`${paymentServiceUrl}/orders`, {
+                params: {
+                  merchantId: cfg.merchantId,
+                  status: "COMPLETED",
+                  fromDate: todayISTStr,
+                  toDate: todayISTStr,
+                  limit: 1, // we only need the aggregates, not all rows
+                  includePlatform: false,
+                },
+                timeout: 8000,
+                headers: {
+                  "x-internal-token": process.env.INTERNAL_TOKEN,
+                  "x-organization-id": "platform-org-id",
+                },
+              });
+
+              // The orders endpoint returns successAmount = total COMPLETED amount in the range
+              const actualAmount = Number(resp.data?.successAmount ?? 0);
+              if (actualAmount <= 0) return; // nothing to update
+
+              const storedAmount = Number(cfg.currentDailyAmount ?? 0);
+              // Only update if the payment-service amount is larger than stored
+              // (never shrink — the cron may be mid-run; shrinking could hide in-flight orders)
+              if (actualAmount > storedAmount + 0.01) {
+                await this.prisma.merchantConfig.update({
+                  where: { merchantId: cfg.merchantId },
+                  data: { currentDailyAmount: actualAmount },
+                });
+                this.logger.log(
+                  `[DailyUsageReconcile] ✅ ${cfg.merchantId}: ${storedAmount} → ${actualAmount} (+${(actualAmount - storedAmount).toFixed(2)})`,
+                );
+              }
+            } catch (err) {
+              // Non-critical — log and move on
+              this.logger.warn(
+                `[DailyUsageReconcile] ⚠️ ${cfg.merchantId}: ${err?.message}`,
+              );
+            }
+          }),
+        );
+      }
+    } catch (err) {
+      this.logger.error(
+        `[DailyUsageReconcile] Fatal error: ${err?.message}`,
+        err?.stack,
+      );
     }
   }
 }

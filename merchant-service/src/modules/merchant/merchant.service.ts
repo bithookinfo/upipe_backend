@@ -871,19 +871,18 @@ export class MerchantService {
       const currentTime = currentTimeInMerchantTz;
 
       const lastReset = config ? new Date(config.lastDailyReset) : new Date();
-      const isNewDay = config
-        ? now.getDate() !== lastReset.getDate() ||
-          now.getMonth() !== lastReset.getMonth() ||
-          now.getFullYear() !== lastReset.getFullYear()
-        : true;
+      // Use IST (Asia/Kolkata) date strings so the daily reset aligns with
+      // midnight IST, matching the dashboard's getTodayISTRange() query.
+      const nowISTDate = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const lastResetISTDate = lastReset.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const isNewDay = config ? nowISTDate !== lastResetISTDate : true;
 
       const lastMonthlyReset = config
         ? new Date(config.lastMonthlyReset)
         : new Date();
-      const isNewMonth = config
-        ? now.getMonth() !== lastMonthlyReset.getMonth() ||
-          now.getFullYear() !== lastMonthlyReset.getFullYear()
-        : true;
+      const nowISTMonth = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 7);
+      const lastResetISTMonth = lastMonthlyReset.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 7);
+      const isNewMonth = config ? nowISTMonth !== lastResetISTMonth : true;
 
       if (!merchant.isActive) {
         return {
@@ -1169,16 +1168,15 @@ export class MerchantService {
 
       const now = new Date();
 
-      // Reset logic (same as before)
+      // Use IST date strings to align reset boundaries with midnight IST
       const lastReset = new Date(config.lastDailyReset);
-      const shouldResetDaily =
-        now.getDate() !== lastReset.getDate() ||
-        now.getMonth() !== lastReset.getMonth() ||
-        now.getFullYear() !== lastReset.getFullYear();
+      const nowISTDate2 = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const lastResetISTDate2 = lastReset.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const shouldResetDaily = nowISTDate2 !== lastResetISTDate2;
 
-      const shouldResetMonthly =
-        now.getMonth() !== lastReset.getMonth() ||
-        now.getFullYear() !== lastReset.getFullYear();
+      const nowISTMonth2 = nowISTDate2.slice(0, 7);
+      const lastResetISTMonth2 = lastResetISTDate2.slice(0, 7);
+      const shouldResetMonthly = nowISTMonth2 !== lastResetISTMonth2;
 
       const updateData: any = {};
 
