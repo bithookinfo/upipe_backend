@@ -1331,7 +1331,7 @@ export class OrderStatusCronService {
             customerName: mTxn.customerName || "N/A",
             customerContact: mTxn.customerVpa || null,
             utr: utr,
-            paymentApp: mTxn.note || "GPay",
+            paymentApp: "Google Pay",
             providerId: provider.id,
             merchantId: order.merchantId,
             orderId: order.id,
@@ -1347,18 +1347,105 @@ export class OrderStatusCronService {
 
       if (needsDashboardRefresh) {
         const lastRefresh = this.lastForcedRefreshTime.get(provider.id) || 0;
-        const cooldownMs = 60_000; // Only force-refresh once per 60 seconds per provider
+        // Immediate (yuZqtb) triggers use a 5s cooldown so new payments refresh instantly.
+        // Regular cron ticks use 60s to avoid hammering the dashboard.
+        const cooldownMs = immediate ? 5_000 : 60_000;
         if (Date.now() - lastRefresh > cooldownMs) {
           this.logger.log(
             `🔄 Triggering forced dashboard refresh for provider ${provider.id} due to ambiguous transactions without notes.`,
           );
           this.lastForcedRefreshTime.set(provider.id, Date.now());
-          // Run it in the background so we don't block the cron
-          this.gpayService.forceDashboardRefresh(provider.id).catch((e) => {
-            this.logger.warn(
-              `Failed to trigger dashboard refresh: ${e?.message}`,
-            );
+
+          // AWAIT the refresh — page.reload() fires RPtkab within ~2.5s which populates notes
+          const refreshed = await this.gpayService.forceDashboardRefresh(provider.id).catch((e) => {
+            this.logger.warn(`Failed to trigger dashboard refresh: ${e?.message}`);
+            return false;
           });
+
+          if (refreshed) {
+            this.logger.log(`🔄 Dashboard refreshed — re-reading buffer with notes for provider ${provider.id}...`);
+            // Re-fetch the buffer immediately after refresh so this tick can match with notes
+            const fromDate2 = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+            const refreshedResponse = await this.gpayService.syncTransactions(provider, fromDate2, now).catch(() => null);
+            if (refreshedResponse?.success && refreshedResponse.transactions?.length > 0) {
+              const refreshedResults = refreshedResponse.transactions.map((record: any) => {
+                const r = Array.isArray(record[0]) && record[0].length > 3 ? record[0] : record;
+                return {
+                  txnId: String(r[0]),
+                  utr: r[1] ? String(r[1]) : null,
+                  timestamp: Array.isArray(r[2])
+                    ? new Date(r[2][0] * 1000 + Math.floor((r[2][1] || 0) / 1_000_000))
+                    : new Date(),
+                  amount: Array.isArray(r[3]) ? Number(r[3][1]) : 0,
+                  customerName: Array.isArray(r[8]) ? r[8][0] : null,
+                  customerVpa: Array.isArray(r[8]) ? r[8][1] : null,
+                  status: r[5] === 3 || r[5] === 4 ? 'COMPLETED' : 'PENDING',
+                  note: typeof r[9] === 'string' ? r[9] : null,
+                };
+              });
+              this.logger.log(`[GPay Post-Refresh] ${refreshedResults.length} records with notes: ${refreshedResults.filter((r: any) => r.note).length} have note`);
+
+              // Re-run the order matching with notes
+              for (const order of orders) {
+                if (this.processingOrders.has(order.id)) continue;
+                const orderAmount = Number(order.amount);
+                const orderRef = (order.externalOrderId || '').replace(/[^a-z0-9]/gi, '').toUpperCase();
+
+                for (const txn of refreshedResults) {
+                  if (usedTxnIds.has(String(txn.txnId))) continue;
+                  if (txn.status !== 'COMPLETED') continue;
+                  if (Number(txn.amount) !== orderAmount) continue;
+
+                  const noteRef = (txn.note || '').replace(/[^a-z0-9]/gi, '').toUpperCase();
+                  if (!noteRef || !orderRef) continue; // Still no note — skip
+                  if (!noteRef.includes(orderRef)) continue; // Wrong note
+
+                  // Collision prevention
+                  const externalTxnId = String(txn.txnId);
+                  if (this.processedTransactionIds.has(externalTxnId)) continue;
+                  try {
+                    const paymentServiceUrl = process.env.PAYMENT_SERVICE_URL;
+                    const existingTxnResponse = await axios.get(
+                      `${paymentServiceUrl}/transactions?externalTransactionId=${externalTxnId}`,
+                      { timeout: 5000, headers: { 'x-internal-token': process.env.INTERNAL_TOKEN, 'x-organization-id': 'platform-org-id' } },
+                    );
+                    const existingTxns = existingTxnResponse.data?.transactions || [];
+                    if (existingTxns.length > 0 && existingTxns[0].orderId) {
+                      this.processedTransactionIds.add(externalTxnId);
+                      continue;
+                    }
+                  } catch { }
+
+                  usedTxnIds.add(externalTxnId);
+                  this.logger.log(`🎯 [Post-Refresh] Found note-matched GPay txn for order ${order.externalOrderId}: ₹${txn.amount} (UTR: ${txn.utr}, Note: ${txn.note})`);
+                  const utr = txn.utr || txn.txnId;
+                  const mTxn = { ...txn, externalTransactionId: externalTxnId, amount: orderAmount };
+                  const success = await this.syncTransactionAndCompleteOrder(order, {
+                    externalTransactionId: externalTxnId,
+                    amount: orderAmount,
+                    currency: 'INR',
+                    status: 'COMPLETED',
+                    timestamp: txn.timestamp,
+                    providerResponse: mTxn,
+                    customerName: txn.customerName || 'N/A',
+                    customerContact: txn.customerVpa || null,
+                    utr,
+                    paymentApp: 'Google Pay',
+                    paymentMethod: 'UPI',
+                    providerCode: 'GPAY',
+                    providerId: provider.id,
+                    merchantId: order.merchantId,
+                    orderId: order.id,
+                  });
+                  if (success) {
+                    this.processedTransactionIds.add(externalTxnId);
+                    if (this.processedTransactionIds.size > 10000) this.processedTransactionIds.clear();
+                  }
+                  break; // Move to next order
+                }
+              }
+            }
+          }
         }
       }
     } catch (error) {

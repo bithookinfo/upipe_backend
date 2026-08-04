@@ -579,7 +579,7 @@ export class OrdersService {
         let app = appRaw || providerRaw;
         if (!app) return;
 
-        if (app === "gpay" || app.includes("google") || app.includes("okicici") || app.includes("okaxis") || app.includes("oksbi") || app.includes("okhdfc")) {
+        if (app === "gpay" || app.includes("google") || app.includes("okicici") || app.includes("okaxis") || app.includes("oksbi") || app.includes("okhdfc") || /^up[0-9a-f]{8,}/i.test(app) || /^ucgy6/i.test(app)) {
           appBreakdownStats.gpay.amount += amt; appBreakdownStats.gpay.count += count;
         } else if (app.includes("phonepe") || app.includes("phone pe") || app.includes("ybl") || app.includes("ibl") || app.includes("axl")) {
           appBreakdownStats.phonepe.amount += amt; appBreakdownStats.phonepe.count += count;

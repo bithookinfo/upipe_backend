@@ -7,12 +7,13 @@ import { SubscriptionAssignmentController } from './controllers/subscription-ass
 import { UnlockController } from './controllers/unlock.controller';
 import { RealSubscriptionService } from './services/real-subscription.service';
 import { UnlockService } from './services/unlock.service';
+import { RedisService } from './services/redis.service';
 import { PrismaService } from './prisma/prisma.service';
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true }), ScheduleModule.forRoot()],
   controllers: [HealthController, RealSubscriptionController, SubscriptionAssignmentController, UnlockController],
-  providers: [RealSubscriptionService, UnlockService, PrismaService],
-  exports: [RealSubscriptionService, UnlockService, PrismaService],
+  providers: [RealSubscriptionService, UnlockService, RedisService, PrismaService],
+  exports: [RealSubscriptionService, UnlockService, RedisService, PrismaService],
 })
 export class AppModule { }

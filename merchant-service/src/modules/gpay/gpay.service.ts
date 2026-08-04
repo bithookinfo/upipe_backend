@@ -2684,13 +2684,18 @@ export class GpayService implements OnModuleDestroy {
     try {
       this.logger.log(`📡 Setting up real-time GPay listener for provider ${providerId}...`);
 
-      // Monitor navigations (detect redirects to login/error pages)
+      // Monitor navigations (detect redirects to login/error pages or /activity/ drift)
       session.page.on('framenavigated', (frame: any) => {
         const url = frame.url();
-        if (frame === session.page.mainFrame() && !url.includes(businessId)) {
-          this.logger.warn(`⚠️ GPay browser navigated away from transactions: ${url} (Provider: ${providerId})`);
-          if (url.includes('accounts.google.com') || url.includes('ServiceLogin')) {
-            this.logger.error(`🚫 GPay SESSION EXPIRED (Redirected to login) for provider ${providerId}`);
+        if (frame === session.page.mainFrame()) {
+          if (!url.includes(businessId)) {
+            this.logger.warn(`⚠️ GPay browser navigated away from transactions: ${url} (Provider: ${providerId})`);
+            if (url.includes('accounts.google.com') || url.includes('ServiceLogin')) {
+              this.logger.error(`🚫 GPay SESSION EXPIRED (Redirected to login) for provider ${providerId}`);
+            }
+          } else if (url.includes('/activity/')) {
+            // /activity/ does NOT fire RPtkab with notes. Only /transactions/ does.
+            this.logger.warn(`⚠️ GPay page drifted to /activity/ for ${providerId} — notes will be missing until healed to /transactions/`);
           }
         }
       });
@@ -2889,9 +2894,33 @@ export class GpayService implements OnModuleDestroy {
       }
 
       const currentUrl = String(page.url?.() || "");
+
+      // Heal condition 1: bare /transactions/ without a businessId
       const isMissingBusinessIdTxnUrl =
         /^https:\/\/pay\.google\.com\/g4b\/transactions\/?(?:[?#].*)?$/i.test(currentUrl);
-      if (!isMissingBusinessIdTxnUrl) return false;
+
+      // Heal condition 2: on /activity/ page — this page does NOT fire RPtkab with notes.
+      // Only the /transactions/ page fires the RPtkab batchexecute which contains the note field.
+      const isActivityUrl =
+        /^https:\/\/pay\.google\.com\/g4b\/activity\/([^/?#]+)/i.test(currentUrl);
+
+      if (!isMissingBusinessIdTxnUrl && !isActivityUrl) return false;
+
+      // Extract businessId from /activity/... URL if present
+      if (isActivityUrl && !isMissingBusinessIdTxnUrl) {
+        const activityMatch = currentUrl.match(/\/activity\/([^/?#]+)/i);
+        const activityBusinessId = activityMatch?.[1];
+        if (activityBusinessId) {
+          const healedUrl = `https://pay.google.com/g4b/transactions/${activityBusinessId}`;
+          this.logger.warn(
+            `🩹 [DIAGNOSTIC] GPay on /activity/ page for ${providerId} (${currentUrl}). Healing to /transactions/ for RPtkab notes: ${healedUrl}`,
+          );
+          await page.goto(healedUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+          // Update session businessId if needed
+          if (!session?.businessId) session.businessId = activityBusinessId;
+          return true;
+        }
+      }
 
       let businessId = session?.businessId || fallbackBusinessId;
       if (!businessId) {
@@ -2981,10 +3010,32 @@ export class GpayService implements OnModuleDestroy {
         return false;
       }
       this.logger.log(`🔄 [DIAGNOSTIC] Forcing GPay dashboard refresh for ${providerId} to fetch missing notes...`);
+
+      // Snapshot buffer size before reload so we can detect when RPtkab fires with new data
+      const bufferBefore = (this.recentGPayPayments.get(providerId) || []).length;
+
       await session.page.reload({ waitUntil: "domcontentloaded", timeout: 20000 });
-      // Clear the last load time so syncTransactions also knows it reloaded
+      // Clear the last RPtkab load time so the next syncTransactions knows to wait for fresh data
       this.lastRPTkabLoadAt.delete(providerId);
-      await new Promise((r) => setTimeout(r, 2500)); // allow RPtkab to fire and populate buffer
+
+      // Poll for up to 5s (10 × 500ms) until RPtkab fires and repopulates the buffer with notes
+      const maxWaitMs = 5000;
+      const pollInterval = 500;
+      const polls = Math.ceil(maxWaitMs / pollInterval);
+      for (let i = 0; i < polls; i++) {
+        await new Promise((r) => setTimeout(r, pollInterval));
+        const bufferNow = (this.recentGPayPayments.get(providerId) || []).length;
+        const rptkabFired = this.lastRPTkabLoadAt.has(providerId);
+        if (rptkabFired || bufferNow > bufferBefore) {
+          this.logger.log(`✅ [DIAGNOSTIC] RPtkab fired after ${(i + 1) * pollInterval}ms for ${providerId} (buffer: ${bufferBefore} → ${bufferNow})`);
+          break;
+        }
+      }
+
+      if (!this.lastRPTkabLoadAt.has(providerId)) {
+        this.logger.warn(`⚠️ [DIAGNOSTIC] RPtkab did not fire within 5s after refresh for ${providerId} — notes may still be missing`);
+      }
+
       return true;
     } catch (e: any) {
       this.logger.warn(`⚠️ Failed to force GPay dashboard refresh for ${providerId}: ${e?.message}`);

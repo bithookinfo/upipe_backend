@@ -37,7 +37,17 @@ async getMerchantsBatch(@Body() body: { merchantIds: string[] }) {
     where: { id: { in: body.merchantIds } },
     select: { id: true, name: true }
   });
-  return { success: true, data: merchants };
+}
+
+@Get("organizations/:organizationId/provider-counts")
+@UseGuards(InternalAuthGuard)
+@ApiOperation({ summary: "Internal: Get provider connection counts for an organization" })
+async getProviderCounts(@Param("organizationId") organizationId: string) {
+  if (!organizationId) {
+    return { success: false, data: {} };
+  }
+  const counts = await this.merchantService.getProviderCountsByOrg(organizationId);
+  return { success: true, data: counts };
 }
 
 @Get("list")

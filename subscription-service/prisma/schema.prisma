@@ -90,7 +90,8 @@ model OrgSubscription {
   customLimits Json? @map("custom_limits")
   
   // Groups slots from the same purchase
-  purchaseId  String? @map("purchase_id") @db.VarChar(36)
+  purchaseId        String? @map("purchase_id") @db.VarChar(36)
+  purchaseUnitIndex Int?    @map("purchase_unit_index")
   
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
@@ -103,6 +104,7 @@ model OrgSubscription {
   @@index([organizationId, status])
   @@index([merchantId])
   @@index([purchaseId])
+  @@unique([purchaseId, purchaseUnitIndex])
   @@map("org_subscriptions")
 }
 

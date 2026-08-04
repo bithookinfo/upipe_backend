@@ -57,6 +57,47 @@ export class RealSubscriptionController implements OnModuleInit {
     return this.realSubscriptionService.assignTrialSubscription(organizationId);
   }
 
+  // ─── PROVIDER ENTITLEMENTS ───────────────────────────────
+
+  @Get('organizations/:organizationId/provider-entitlements')
+  @ApiOperation({ summary: 'Get authoritative provider entitlements (allowed, used, remaining)' })
+  @ApiParam({ name: 'organizationId', description: 'Organization ID' })
+  async getProviderEntitlements(
+    @Param('organizationId') organizationId: string,
+    @Headers('x-organization-id') reqOrgId?: string,
+    @Headers('x-user-type') userType?: string,
+    @Headers('x-is-super-admin') isSuperAdmin?: string
+  ) {
+    this.validateAccess(organizationId, reqOrgId, isSuperAdmin, userType);
+    return this.realSubscriptionService.getProviderEntitlements(organizationId);
+  }
+
+  @Post('organizations/:organizationId/reserve')
+  @ApiOperation({ summary: 'Atomically reserve a provider slot' })
+  async reserveProviderSlot(
+    @Param('organizationId') organizationId: string,
+    @Body() body: { providerCode: string },
+    @Headers('x-organization-id') reqOrgId?: string,
+    @Headers('x-user-type') userType?: string,
+    @Headers('x-is-super-admin') isSuperAdmin?: string
+  ) {
+    this.validateAccess(organizationId, reqOrgId, isSuperAdmin, userType);
+    return this.realSubscriptionService.reserveProviderSlot(organizationId, body.providerCode);
+  }
+
+  @Post('organizations/:organizationId/commit')
+  @ApiOperation({ summary: 'Commit a previously reserved provider slot' })
+  async commitReservation(
+    @Param('organizationId') organizationId: string,
+    @Body() body: { providerCode: string, reservationId: string },
+    @Headers('x-organization-id') reqOrgId?: string,
+    @Headers('x-user-type') userType?: string,
+    @Headers('x-is-super-admin') isSuperAdmin?: string
+  ) {
+    this.validateAccess(organizationId, reqOrgId, isSuperAdmin, userType);
+    return this.realSubscriptionService.commitReservation(organizationId, body.providerCode, body.reservationId);
+  }
+
   // ─── PURCHASE FLOW ─────────────────────────────────────────
 
   @Post('organizations/:organizationId/purchase')

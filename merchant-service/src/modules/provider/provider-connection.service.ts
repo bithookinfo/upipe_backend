@@ -1,11 +1,12 @@
-import {
+import { InternalServerErrorException,
   Injectable,
   Logger,
   BadRequestException,
   ConflictException,
+  HttpException,
 } from "@nestjs/common";
 import { PrismaService } from "../../prisma/prisma.service";
-import { ProviderType, MerchantProviderStatus, MerchantStatus } from "@prisma/client";
+import { ProviderType, MerchantProviderStatus } from "@prisma/client";
 import { PhonePeSimpleService } from "./phonepe-simple.service";
 import { PaytmSimpleService } from "./paytm-simple.service";
 import { BharatPeSimpleService } from "./bharatpe-simple.service";
@@ -441,7 +442,7 @@ export class ProviderConnectionService {
       const phonePeData: any = verificationResult.accountDetails;
 
       // Check Provider Limits first (fail fast)
-      await this.checkProviderLimit(data.organizationId, "PHONEPE", data.isSuperAdmin);
+      const reservationId = await this.reserveProviderSlot(data.organizationId, "PHONEPE", data.isSuperAdmin);
       // NOTE: We intentionally delay duplicate-account checks and merchant create-limit checks
       // until after we have a stable accountIdentifier (UPI) and can revive a soft-deleted merchant on reconnect.
 
@@ -831,8 +832,9 @@ export class ProviderConnectionService {
           ? `PhonePe merchant connected. Please enter your UPI ID manually.`
           : `PhonePe merchant account "${phonePeData.name}" connected successfully`,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`❌ Failed to connect PhonePe:`, error);
+      if (error instanceof HttpException) throw error;
 
       if (error.message?.includes("verification failed")) {
         throw error; // Re-throw verification errors as-is
@@ -866,7 +868,7 @@ export class ProviderConnectionService {
       const phonePeData = data.accountData;
 
       // Check Provider Limits first (fail fast)
-      await this.checkProviderLimit(data.organizationId, "PHONEPE", data.isSuperAdmin);
+      const reservationId = await this.reserveProviderSlot(data.organizationId, "PHONEPE", data.isSuperAdmin);
       // NOTE: We intentionally delay duplicate-account checks and merchant create-limit checks
       // until after we have a stable accountIdentifier (UPI) and can revive a soft-deleted merchant on reconnect.
 
@@ -1282,8 +1284,9 @@ export class ProviderConnectionService {
         requiresManualUpi: !merchantUpiId,
         message: `PhonePe merchant account connected successfully. Transactions are being synchronized in the background.`,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`❌ Failed to connect PhonePe with group:`, error);
+      if (error instanceof HttpException) throw error;
       throw new BadRequestException(
         "Failed to connect PhonePe account with selected group.",
       );
@@ -1326,8 +1329,9 @@ export class ProviderConnectionService {
         connection: merchantProvider,
         message: "GPay connected successfully",
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`❌ Failed to connect GPay:`, error);
+      if (error instanceof HttpException) throw error;
       throw new BadRequestException("Failed to connect GPay");
     }
   }
@@ -1369,8 +1373,9 @@ export class ProviderConnectionService {
           sessionId: result.sessionId,
         },
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`❌ Failed to send Paytm OTP:`, error);
+      if (error instanceof HttpException) throw error;
 
       if (error.message?.includes("Invalid credentials")) {
         throw new BadRequestException(
@@ -1410,7 +1415,7 @@ export class ProviderConnectionService {
       }
 
       // Check Provider Limits first
-      await this.checkProviderLimit(data.organizationId, "PAYTM", data.isSuperAdmin);
+      const reservationId = await this.reserveProviderSlot(data.organizationId, "PAYTM", data.isSuperAdmin);
 
       const paytmCredMatch = (cred: any) => {
         const u = (data.username || "").trim();
@@ -1633,6 +1638,8 @@ export class ProviderConnectionService {
         ? accountIdentifier
         : verifyResult.upiId;
 
+      await this.commitProviderSlot(data.organizationId, "PAYTM", reservationId, data.isSuperAdmin);
+
       return {
         success: true,
         message:
@@ -1643,8 +1650,9 @@ export class ProviderConnectionService {
         displayName: verifyResult.displayName,
         paytmMerchantId: verifyResult.merchantId,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error("❌ Paytm connection failed:", error);
+      if (error instanceof HttpException) throw error;
       throw new BadRequestException(
         "Failed to connect Paytm: " + error.message,
       );
@@ -1740,7 +1748,7 @@ export class ProviderConnectionService {
     isSuperAdmin?: boolean,
   ) {
     if (isSuperAdmin) {
-      this.logger.log(`🛡️ Platform/SuperAdmin bypass for provider ${providerCode} in organization ${organizationId}`);
+      this.logger.log(`🛡️ Platform/SuperAdmin bypass for provider limit check ${providerCode} in organization ${organizationId}`);
       return;
     }
     try {
@@ -1759,24 +1767,97 @@ export class ProviderConnectionService {
         );
       }
 
-      // 2. Check if provider is included in the plan
+      // 2. Check current entitlements
       const response = await axios.get(
-        `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/provider-access/${providerCode}`,
+        `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/provider-entitlements`,
         { headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": organizationId } }
       );
 
-      if (response.data && response.data.allowed === false) {
+      const data = response.data?.data?.[providerCode.toUpperCase()];
+      if (!data || data.allowed === 0) {
         throw new BadRequestException(`Provider ${providerCode} is not available in your current subscription plan`);
       }
-    } catch (error) {
+      if (data.remaining <= 0) {
+        throw new BadRequestException(`No available slots for provider ${providerCode}. Please upgrade your plan.`);
+      }
+    } catch (error: any) {
       if (error instanceof BadRequestException) throw error;
       this.logger.error(`Failed to check provider limits: ${error.message}`);
-      // Fail open or closed? Closed is safer for limits.
       if (error.response?.status === 400 || error.response?.status === 403) {
         throw new BadRequestException(
           error.response?.data?.message || "Provider limit validation failed",
         );
       }
+    }
+  }
+
+  private async reserveProviderSlot(
+    organizationId: string,
+    providerCode: string,
+    isSuperAdmin?: boolean,
+  ): Promise<string | null> {
+    if (isSuperAdmin) {
+      this.logger.log(`🛡️ Platform/SuperAdmin bypass for provider ${providerCode} in organization ${organizationId}`);
+      return null;
+    }
+    try {
+      const axios = require("axios");
+      const subscriptionServiceUrl = process.env.SUBSCRIPTION_SERVICE_URL;
+
+      // 1. Check if the merchant type requires an unlock and if the user has it
+      const unlockResponse = await axios.get(
+        `${subscriptionServiceUrl}/merchant-unlocks/organizations/${organizationId}/check/${providerCode}`,
+        { headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": organizationId } }
+      );
+
+      if (!unlockResponse.data.unlocked) {
+        throw new BadRequestException(
+          unlockResponse.data.reason || `${providerCode} requires a one-time unlock. Please purchase the unlock from the merchant onboarding page.`
+        );
+      }
+
+      // 2. Reserve slot via subscription-service
+      const response = await axios.post(
+        `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/reserve`,
+        { providerCode },
+        { headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": organizationId } }
+      );
+
+      return response.data.reservationId;
+    } catch (error: any) {
+      if (error instanceof BadRequestException) throw error;
+      this.logger.error(`Failed to reserve provider slot: ${error.message}`);
+      
+      if (error.response?.status === 400 || error.response?.status === 403 || error.response?.status === 409) {
+        throw new BadRequestException(
+          error.response?.data?.message || `Provider ${providerCode} limit validation failed or limit reached`,
+        );
+      }
+      throw new InternalServerErrorException(`Could not communicate with subscription service`);
+    }
+  }
+
+  private async commitProviderSlot(
+    organizationId: string,
+    providerCode: string,
+    reservationId: string | null,
+    isSuperAdmin?: boolean,
+  ) {
+    if (isSuperAdmin || !reservationId) return;
+
+    try {
+      const axios = require("axios");
+      const subscriptionServiceUrl = process.env.SUBSCRIPTION_SERVICE_URL;
+
+      await axios.post(
+        `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/commit`,
+        { providerCode, reservationId },
+        { headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": organizationId } }
+      );
+      this.logger.log(`✅ Committed slot reservation ${reservationId} for ${providerCode} (Org: ${organizationId})`);
+    } catch (error: any) {
+      this.logger.error(`⚠️ Failed to commit provider slot reservation ${reservationId}: ${error.message}`);
+      // Don't throw here, the provider connection is already successful.
     }
   }
 
@@ -2070,6 +2151,7 @@ export class ProviderConnectionService {
       };
     } catch (error: any) {
       this.logger.error(`❌ BharatPe OTP failed:`, error?.message);
+      if (error instanceof HttpException) throw error;
       throw new BadRequestException(
         error?.message || "Failed to send BharatPe OTP",
       );
@@ -2137,7 +2219,7 @@ export class ProviderConnectionService {
       }
 
       // Step 4: Check subscription limits
-      await this.checkProviderLimit(data.organizationId, "bharatpe", data.isSuperAdmin);
+      const reservationId = await this.reserveProviderSlot(data.organizationId, "bharatpe", data.isSuperAdmin);
 
       // Prefer stable UPI VPA as identifier; fall back to phone number
       const accountIdentifier = upiId || data.phoneNumber;
@@ -2262,6 +2344,8 @@ export class ProviderConnectionService {
       // Reconnect backfill: sync from lastSyncedAt - buffer (or last 7d) to cover gap during disconnect
       this.triggerReconnectBackfill(txResult.merchantId, reconnectProvider ?? null);
 
+      await this.commitProviderSlot(data.organizationId, "bharatpe", reservationId, data.isSuperAdmin);
+
       return {
         success: true,
         message: "BharatPe connected successfully",
@@ -2272,6 +2356,7 @@ export class ProviderConnectionService {
       };
     } catch (error: any) {
       this.logger.error(`❌ BharatPe connection failed:`, error?.message);
+      if (error instanceof HttpException) throw error;
       throw new BadRequestException(
         error?.message || "Failed to connect BharatPe",
       );
@@ -2308,6 +2393,7 @@ export class ProviderConnectionService {
       };
     } catch (error: any) {
       this.logger.error(`❌ QuintusPay OTP failed:`, error?.message);
+      if (error instanceof HttpException) throw error;
       throw new BadRequestException(
         error?.message || "Failed to send QuintusPay OTP",
       );
@@ -2342,7 +2428,7 @@ export class ProviderConnectionService {
         verifyResult.accessToken,
       );
 
-      await this.checkProviderLimit(data.organizationId, "quintus", data.isSuperAdmin);
+      const reservationId = await this.reserveProviderSlot(data.organizationId, "quintus", data.isSuperAdmin);
 
       const accountIdentifier = upiId || data.phoneNumber;
       
@@ -2487,6 +2573,8 @@ export class ProviderConnectionService {
 
       this.triggerReconnectBackfill(txResult.merchantId, reconnectProvider ?? null);
 
+      await this.commitProviderSlot(data.organizationId, "quintus", reservationId, data.isSuperAdmin);
+
       return {
         success: true,
         message: "QuintusPay connected successfully",
@@ -2496,6 +2584,7 @@ export class ProviderConnectionService {
       };
     } catch (error: any) {
       this.logger.error(`❌ QuintusPay connection failed:`, error?.message);
+      if (error instanceof HttpException) throw error;
       throw new BadRequestException(
         error?.message || "Failed to connect QuintusPay",
       );
@@ -2525,6 +2614,7 @@ export class ProviderConnectionService {
       };
     } catch (error: any) {
       this.logger.error("❌ HDFC OTP send failed:", error);
+      if (error instanceof HttpException) throw error;
       throw new BadRequestException(
         error.message || "Failed to send HDFC OTP",
       );
@@ -2551,7 +2641,7 @@ export class ProviderConnectionService {
 
     try {
       // Check limits
-      await this.checkProviderLimit(data.organizationId, "hdfc", data.isSuperAdmin);
+      const reservationId = await this.reserveProviderSlot(data.organizationId, "hdfc", data.isSuperAdmin);
 
       // Verify OTP
       const verifyResult = await this.hdfcVyaparService.verifyOtp(
@@ -2665,6 +2755,8 @@ export class ProviderConnectionService {
 
       this.triggerReconnectBackfill(txResult.merchantId, reconnectProvider ?? null);
 
+      await this.commitProviderSlot(data.organizationId, "hdfc", reservationId, data.isSuperAdmin);
+
       return {
         success: true,
         message: "HDFC SmartHub Vyapar connected successfully",
@@ -2674,6 +2766,7 @@ export class ProviderConnectionService {
       };
     } catch (error: any) {
       this.logger.error(`❌ HDFC connection failed:`, error?.message);
+      if (error instanceof HttpException) throw error;
       throw new BadRequestException(
         error?.message || "Failed to connect HDFC Vyapar",
       );

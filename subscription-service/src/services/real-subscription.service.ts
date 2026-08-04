@@ -9,12 +9,16 @@ import { Cron, CronExpression } from "@nestjs/schedule";
 import { PrismaService } from "../prisma/prisma.service";
 import axios from "axios";
 import { Decimal } from "@prisma/client/runtime/library";
+import { RedisService } from "./redis.service";
 
 @Injectable()
 export class RealSubscriptionService {
   private readonly logger = new Logger(RealSubscriptionService.name);
 
-  constructor(private readonly prisma: PrismaService) { }
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redisService: RedisService
+  ) { }
 
 
   async getSubscriptionPlans() {
@@ -48,6 +52,7 @@ export class RealSubscriptionService {
           providerAccess: plan.providerAccess.map((pa) => ({
             providerCode: pa.providerCode,
             isIncluded: pa.isIncluded,
+            slotsCount: pa.slotsCount,
           })),
         })),
       };
@@ -196,6 +201,167 @@ export class RealSubscriptionService {
     } catch (error) {
       this.logger.error("Failed to get organization subscription:", error);
       throw new BadRequestException("Failed to retrieve subscription details");
+    }
+  }
+
+  async getProviderEntitlements(organizationId: string) {
+    try {
+      // 1. Get active subscriptions with their plans and provider access
+      const activeSlots = await this.prisma.orgSubscription.findMany({
+        where: {
+          organizationId,
+          status: 'ACTIVE',
+          OR: [
+            { endDate: null },
+            { endDate: { gt: new Date() } }
+          ]
+        },
+        include: {
+          plan: {
+            include: { providerAccess: true }
+          }
+        }
+      });
+
+      // 2. Sum allowed counts by provider
+      const allowedCounts: Record<string, number> = {};
+      for (const slot of activeSlots) {
+        if (slot.plan?.providerAccess) {
+          for (const pa of slot.plan.providerAccess) {
+            if (pa.isIncluded) {
+              const code = pa.providerCode.toUpperCase();
+              allowedCounts[code] = (allowedCounts[code] || 0) + (pa.slotsCount || 0);
+            }
+          }
+        }
+      }
+
+      // 3. Fetch used counts from merchant-service
+      let usedCounts: Record<string, number> = {};
+      try {
+        const axios = require('axios');
+        const merchantServiceUrl = process.env.MERCHANT_SERVICE_URL;
+        if (merchantServiceUrl) {
+          const res = await axios.get(`${merchantServiceUrl}/merchant/organizations/${organizationId}/provider-counts`, {
+            headers: { 'x-internal-token': process.env.INTERNAL_TOKEN }
+          });
+          if (res.data?.success) {
+            usedCounts = res.data.data;
+          }
+        }
+      } catch (err: any) {
+        this.logger.error(`Failed to fetch used counts from merchant-service for org ${organizationId}: ${err.message}`);
+      }
+
+      // 4. Combine results
+      const entitlements: Record<string, { allowed: number, used: number, remaining: number }> = {};
+      // Include all providers that have an allowed limit
+      for (const [code, allowed] of Object.entries(allowedCounts)) {
+        const used = usedCounts[code] || 0;
+        entitlements[code] = { allowed, used, remaining: Math.max(0, allowed - used) };
+      }
+      // Also include providers that have usage but no allowed limit
+      for (const [code, used] of Object.entries(usedCounts)) {
+        if (!entitlements[code]) {
+          entitlements[code] = { allowed: 0, used, remaining: 0 };
+        }
+      }
+
+      return {
+        success: true,
+        data: entitlements
+      };
+    } catch (error) {
+      this.logger.error("Failed to get provider entitlements:", error);
+      throw new BadRequestException("Failed to retrieve provider entitlements");
+    }
+  }
+
+  // ─── RESERVATION ENGINE ───────────────────────────────────
+
+  async reserveProviderSlot(organizationId: string, providerCode: string): Promise<{ reservationId: string }> {
+    const lockKey = `reservation_lock:${organizationId}:${providerCode}`;
+    const redis = this.redisService.getClient();
+
+    // Wait up to 3 seconds for lock
+    let lockAcquired = false;
+    for (let i = 0; i < 30; i++) {
+      const lock = await redis.set(lockKey, 'locked', 'EX', 5, 'NX');
+      if (lock) {
+        lockAcquired = true;
+        break;
+      }
+      await new Promise(r => setTimeout(r, 100));
+    }
+    if (!lockAcquired) throw new BadRequestException('System busy, please try again');
+
+    try {
+      const entitlements = await this.getProviderEntitlements(organizationId);
+      const data = entitlements.data[providerCode.toUpperCase()];
+      if (!data) throw new BadRequestException(`No active entitlement for provider ${providerCode}`);
+
+      // Get current active reservations and filter expired ones
+      const resKey = `reservations:${organizationId}:${providerCode}`;
+      const activeReservationsStr = await redis.get(resKey);
+      let activeReservations: Array<{ id: string, expiresAt: number }> = activeReservationsStr ? JSON.parse(activeReservationsStr) : [];
+      
+      const now = Date.now();
+      activeReservations = activeReservations.filter(r => r.expiresAt > now);
+
+      if (data.allowed - data.used - activeReservations.length <= 0) {
+        throw new BadRequestException(`No available slots for provider ${providerCode}`);
+      }
+
+      const reservationId = require('crypto').randomUUID();
+      activeReservations.push({ id: reservationId, expiresAt: now + 5 * 60 * 1000 }); // 5 min TTL
+      
+      // Store reservations and set TTL for the key
+      await redis.set(resKey, JSON.stringify(activeReservations), 'PX', 5 * 60 * 1000);
+
+      return { reservationId };
+    } finally {
+      await redis.del(lockKey);
+    }
+  }
+
+  async commitReservation(organizationId: string, providerCode: string, reservationId: string): Promise<{ success: true }> {
+    const lockKey = `reservation_lock:${organizationId}:${providerCode}`;
+    const redis = this.redisService.getClient();
+
+    let lockAcquired = false;
+    for (let i = 0; i < 30; i++) {
+      const lock = await redis.set(lockKey, 'locked', 'EX', 5, 'NX');
+      if (lock) {
+        lockAcquired = true;
+        break;
+      }
+      await new Promise(r => setTimeout(r, 100));
+    }
+    if (!lockAcquired) throw new BadRequestException('System busy, please try again');
+
+    try {
+      const resKey = `reservations:${organizationId}:${providerCode}`;
+      const activeReservationsStr = await redis.get(resKey);
+      if (!activeReservationsStr) throw new BadRequestException('Reservation not found or expired');
+      
+      let activeReservations: Array<{ id: string, expiresAt: number }> = JSON.parse(activeReservationsStr);
+      const now = Date.now();
+      activeReservations = activeReservations.filter(r => r.expiresAt > now);
+
+      const resIndex = activeReservations.findIndex(r => r.id === reservationId);
+      if (resIndex === -1) throw new BadRequestException('Reservation not found or expired');
+
+      activeReservations.splice(resIndex, 1);
+      
+      if (activeReservations.length > 0) {
+        await redis.set(resKey, JSON.stringify(activeReservations), 'PX', 5 * 60 * 1000);
+      } else {
+        await redis.del(resKey);
+      }
+
+      return { success: true };
+    } finally {
+      await redis.del(lockKey);
     }
   }
 
@@ -427,18 +593,22 @@ export class RealSubscriptionService {
     const startDate = new Date();
     const endDate = this.computeEndDate(startDate, purchase.plan.billingCycle, purchase.plan.durationDays);
 
-    const slotData = Array.from({ length: purchase.quantity }, () => ({
+    const slotData = Array.from({ length: purchase.quantity }, (_, i) => ({
       organizationId: purchase.organizationId,
       planId: purchase.planId,
       merchantId: null,
-      status: "UNASSIGNED" as const,
+      status: "ACTIVE" as const, // Change to ACTIVE as it's an active plan unit
       startDate,
       endDate,
       purchaseId: purchase.id,
+      purchaseUnitIndex: i,
     }));
 
+    // Use createMany to support idempotency if needed, or loop with upsert
+    // But since purchase.status = COMPLETED check at the top handles idempotency for the purchase itself,
+    // createMany is fine.
     await this.prisma.$transaction([
-      ...slotData.map((data) => this.prisma.orgSubscription.create({ data })),
+      this.prisma.orgSubscription.createMany({ data: slotData, skipDuplicates: true }),
       this.prisma.subscriptionPurchase.update({
         where: { id: purchase.id },
         data: {
@@ -537,17 +707,13 @@ export class RealSubscriptionService {
   }
 
   async checkCanConnectMerchant(organizationId: string) {
-    const unassignedCount = await this.prisma.orgSubscription.count({
-      where: { organizationId, status: "UNASSIGNED" },
-    });
-
+    // Under new rules, merchant creation consumes no subscription capacity.
+    // Limits are enforced at the provider gateway connection level.
     return {
       success: true,
-      allowed: unassignedCount > 0,
-      unassignedCount,
-      message: unassignedCount > 0
-        ? `${unassignedCount} slot(s) available`
-        : "No available slots. Please purchase a plan to connect more merchants.",
+      allowed: true,
+      unassignedCount: 999,
+      message: "Unlimited merchant slots available",
     };
   }
 
@@ -853,17 +1019,17 @@ export class RealSubscriptionService {
       // 3. Create the trial slot
       const duration = trialPlan.durationDays || trialPlan.trialDays || 7;
       const startDate = new Date();
-      const endDate = new Date();
-      endDate.setDate(startDate.getDate() + duration);
+      const endDate = this.computeEndDate(startDate, trialPlan.billingCycle, trialPlan.durationDays);
 
       const subscription = await this.prisma.orgSubscription.create({
         data: {
           organizationId,
           planId: trialPlan.id,
-          status: "UNASSIGNED",
+          status: "ACTIVE", // Start trial active immediately
           startDate,
           endDate,
           autoRenew: false,
+          purchaseUnitIndex: 0,
         },
       });
 
@@ -982,21 +1148,20 @@ export class RealSubscriptionService {
 
     const purchaseId = require("crypto").randomUUID();
 
-    const slots = await this.prisma.$transaction(
-      Array.from({ length: quantity }, () =>
-        this.prisma.orgSubscription.create({
-          data: {
-            organizationId,
-            planId,
-            merchantId: null,
-            status: "UNASSIGNED",
-            startDate,
-            endDate,
-            purchaseId,
-          },
-        })
-      )
-    );
+    const slotData = Array.from({ length: quantity }, (_, i) => ({
+      organizationId,
+      planId,
+      merchantId: null,
+      status: "ACTIVE" as const,
+      startDate,
+      endDate,
+      purchaseId,
+      purchaseUnitIndex: i,
+    }));
+
+    const slots = await this.prisma.$transaction([
+      this.prisma.orgSubscription.createMany({ data: slotData, skipDuplicates: true }),
+    ]);
 
     await this.prisma.subscriptionHistory.create({
       data: {

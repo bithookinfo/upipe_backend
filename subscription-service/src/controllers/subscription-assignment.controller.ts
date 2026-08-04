@@ -1,8 +1,9 @@
-import { Controller, Get, Post, Patch, Put, Param, Body, Query, Headers, ForbiddenException, Ip, Delete } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { Controller, Get, Post, Patch, Put, Delete, Param, Body, Headers, Query, Ip, HttpException, HttpStatus,ForbiddenException } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiParam } from '@nestjs/swagger';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealSubscriptionService } from '../services/real-subscription.service';
 import { logAuditActivity } from '../utils/audit.util';
+import axios from 'axios';
 
 @Controller('subscriptions')
 @ApiTags('Subscriptions (Super-Admin)')
@@ -28,7 +29,10 @@ export class SubscriptionAssignmentController {
         const isAdmin = isSuperAdmin === 'true' || userTypeUpper === 'SUPER_ADMIN' || userTypeUpper === 'SUPERADMIN';
         const onlyActive = !isAdmin || activeOnly === 'true';
         const plans = await this.prisma.subscriptionPlan.findMany({
-            where: onlyActive ? { isActive: true } : undefined,
+            where: {
+                ...(onlyActive ? { isActive: true } : {}),
+                deletedAt: null
+            },
             include: { providerAccess: true },
             orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }]
         });
@@ -58,13 +62,14 @@ export class SubscriptionAssignmentController {
                 isActive: body.isActive ?? true,
                 isFeatured: body.isFeatured ?? false,
                 sortOrder: body.sortOrder || 0,
-                durationDays: body.durationDays || 28,
+                durationDays: body.durationDays || null,
                 isPublic: body.isPublic ?? true,
                 isTrial: body.isTrial ?? false,
                 providerAccess: {
                     create: body.providerAccess?.map((pa: any) => ({
                         providerCode: pa.providerCode,
                         isIncluded: pa.isIncluded ?? true,
+                        slotsCount: pa.slotsCount ?? 1,
                     })) || []
                 }
             },
@@ -84,6 +89,65 @@ export class SubscriptionAssignmentController {
         this.validateSuperAdmin(isSuperAdmin, userType);
         const plan = await this.prisma.subscriptionPlan.findUnique({ where: { id } });
         if (!plan) return { success: false, message: 'Plan not found', data: null };
+
+        // Plan edit protection
+        const activeSubscriptions = await this.prisma.orgSubscription.findMany({
+            where: {
+                planId: id,
+                status: 'ACTIVE',
+                OR: [
+                    { endDate: null },
+                    { endDate: { gt: new Date() } }
+                ]
+            },
+            select: { organizationId: true },
+            distinct: ['organizationId'],
+            take: 26
+        });
+
+        if (activeSubscriptions.length > 0) {
+            const orgIds = activeSubscriptions.map(s => s.organizationId);
+            const organizations = [];
+            
+            try {
+                const orgUrl = process.env.ORGANIZATION_SERVICE_URL;
+                if (orgUrl) {
+                    for (const orgId of orgIds.slice(0, 25)) {
+                        try {
+                           const res = await axios.get(`${orgUrl}/organizations/${orgId}`, {
+                             headers: { 'x-user-type': 'SUPER_ADMIN' }
+                           });
+                           organizations.push({
+                               id: orgId,
+                               name: res.data?.data?.organization?.name || res.data?.data?.name || orgId
+                           });
+                        } catch (e) {
+                           organizations.push({ id: orgId, name: orgId });
+                        }
+                    }
+                } else {
+                    organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
+                }
+            } catch (err) {
+               organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
+            }
+
+            throw new HttpException({
+                code: 'PLAN_IN_USE',
+                message: 'This plan cannot be edited because it is currently being used by organizations.',
+                activeOrganizationCount: activeSubscriptions.length > 25 ? 26 : activeSubscriptions.length,
+                organizations: organizations,
+                hasMore: activeSubscriptions.length > 25
+            }, HttpStatus.CONFLICT);
+        }
+
+        const billingCycle = body.billingCycle || plan.billingCycle;
+        if (billingCycle !== 'LIFETIME') {
+            const newDurationDays = body.durationDays !== undefined ? body.durationDays : plan.durationDays;
+            if (newDurationDays == null || typeof newDurationDays !== 'number' || !Number.isInteger(newDurationDays) || newDurationDays <= 0 || newDurationDays > 3650) {
+                return { success: false, message: 'durationDays is mandatory and must be a positive integer (max 3650) for non-lifetime plans', data: null };
+            }
+        }
 
         const updated = await this.prisma.$transaction(async (tx) => {
             // Update plan basics
@@ -121,6 +185,7 @@ export class SubscriptionAssignmentController {
                         planId: id,
                         providerCode: pa.providerCode,
                         isIncluded: pa.isIncluded ?? true,
+                        slotsCount: pa.slotsCount ?? 1,
                     }))
                 });
             }
@@ -132,6 +197,80 @@ export class SubscriptionAssignmentController {
         });
 
         return { success: true, data: updated };
+    }
+
+    @Get('plans/:id/usage')
+    @ApiOperation({ summary: 'Check if a plan is in use' })
+    async getPlanUsage(
+        @Param('id') id: string,
+        @Headers('x-user-type') userType?: string,
+        @Headers('x-is-super-admin') isSuperAdmin?: string
+    ) {
+        this.validateSuperAdmin(isSuperAdmin, userType);
+        
+        // Ensure plan exists
+        const plan = await this.prisma.subscriptionPlan.findUnique({ where: { id } });
+        if (!plan) return { success: false, message: 'Plan not found', data: null };
+
+        const activeSubscriptions = await this.prisma.orgSubscription.findMany({
+            where: {
+                planId: id,
+                status: 'ACTIVE',
+                OR: [
+                    { endDate: null },
+                    { endDate: { gt: new Date() } }
+                ]
+            },
+            select: { organizationId: true },
+            distinct: ['organizationId'],
+            take: 26
+        });
+
+        if (activeSubscriptions.length === 0) {
+            return { success: true, data: { inUse: false } };
+        }
+
+        const orgIds = activeSubscriptions.map(s => s.organizationId);
+        const organizations = [];
+        
+        try {
+            const orgUrl = process.env.ORGANIZATION_SERVICE_URL;
+            if (orgUrl) {
+                for (const orgId of orgIds.slice(0, 25)) {
+                    try {
+                       const axios = require('axios');
+                       const res = await axios.get(`${orgUrl}/organizations/${orgId}`, {
+                         headers: { 'x-user-type': 'SUPER_ADMIN' }
+                       });
+                       organizations.push({
+                           id: orgId,
+                           name: res.data?.data?.organization?.name || res.data?.data?.name || orgId
+                       });
+                    } catch (e) {
+                       organizations.push({ id: orgId, name: orgId });
+                    }
+                }
+            } else {
+                for (const orgId of orgIds.slice(0, 25)) {
+                    organizations.push({ id: orgId, name: orgId });
+                }
+            }
+        } catch (e) {
+            console.error('Error fetching org details', e);
+        }
+
+        const message = activeSubscriptions.length > 25
+            ? `Plan is currently actively assigned to ${activeSubscriptions.length}+ organizations and cannot be deleted.`
+            : `Plan is currently actively assigned to ${activeSubscriptions.length} organizations and cannot be deleted.`;
+            
+        return {
+            success: true,
+            data: {
+                inUse: true,
+                message,
+                organizations
+            }
+        };
     }
 
     @Delete('plans/:id')
@@ -147,7 +286,78 @@ export class SubscriptionAssignmentController {
         const plan = await this.prisma.subscriptionPlan.findUnique({ where: { id } });
         if (!plan) return { success: false, message: 'Plan not found', data: null };
 
-        // Delete plan (provider access will cascade if configured, or we can manually delete)
+        const activeSubscriptions = await this.prisma.orgSubscription.findMany({
+            where: {
+                planId: id,
+                status: 'ACTIVE',
+                OR: [
+                    { endDate: null },
+                    { endDate: { gt: new Date() } }
+                ]
+            },
+            select: { organizationId: true },
+            distinct: ['organizationId'],
+            take: 26
+        });
+
+        if (activeSubscriptions.length > 0) {
+            const orgIds = activeSubscriptions.map(s => s.organizationId);
+            const organizations = [];
+            
+            try {
+                const orgUrl = process.env.ORGANIZATION_SERVICE_URL;
+                if (orgUrl) {
+                    for (const orgId of orgIds.slice(0, 25)) {
+                        try {
+                           const axios = require('axios');
+                           const res = await axios.get(`${orgUrl}/organizations/${orgId}`, {
+                             headers: { 'x-user-type': 'SUPER_ADMIN' }
+                           });
+                           organizations.push({
+                               id: orgId,
+                               name: res.data?.data?.organization?.name || res.data?.data?.name || orgId
+                           });
+                        } catch (e) {
+                           organizations.push({ id: orgId, name: orgId });
+                        }
+                    }
+                } else {
+                    organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
+                }
+            } catch (err) {
+               organizations.push(...orgIds.slice(0, 25).map(id => ({ id, name: id })));
+            }
+
+            throw new HttpException({
+                code: 'PLAN_IN_USE',
+                message: 'This plan cannot be deleted because it is currently being used by active organizations.',
+                activeOrganizationCount: activeSubscriptions.length > 25 ? 26 : activeSubscriptions.length,
+                organizations: organizations,
+                hasMore: activeSubscriptions.length > 25
+            }, HttpStatus.CONFLICT);
+        }
+
+        const hasSubscriptions = await this.prisma.orgSubscription.findFirst({
+            where: { planId: id }
+        });
+        const hasHistory = await this.prisma.subscriptionHistory.findFirst({
+            where: { planId: id }
+        });
+        const hasPurchases = await this.prisma.subscriptionPurchase.findFirst({
+            where: { planId: id }
+        });
+
+        if (hasSubscriptions || hasHistory || hasPurchases) {
+            await this.prisma.subscriptionPlan.update({
+                where: { id },
+                data: {
+                    isActive: false,
+                    deletedAt: new Date()
+                }
+            });
+            return { success: true, message: 'Plan archived successfully' };
+        }
+
         await this.prisma.$transaction(async (tx) => {
             await tx.subscriptionProviderAccess.deleteMany({
                 where: { planId: id }
@@ -183,7 +393,6 @@ export class SubscriptionAssignmentController {
             organizationId: string;
             planId: string;
             quantity?: number;
-            durationMonths?: number;
         },
         @Headers('x-user-type') userType?: string,
         @Headers('x-user-id') userId?: string,

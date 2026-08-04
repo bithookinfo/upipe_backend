@@ -125,7 +125,7 @@ describe("MerchantService", () => {
 
       prismaService.merchant.create.mockResolvedValue(mockMerchant);
 
-      const result = await service.createMerchant(createDto);
+      const result = await service.createMerchant(undefined as any, createDto);
 
       expect(result.success).toBe(true);
       expect(result.merchant.name).toBe("Test Merchant");

@@ -51,6 +51,26 @@ export class MerchantService {
     }
   }
 
+  async getProviderCountsByOrg(organizationId: string) {
+    const providers = await this.prisma.merchantProvider.findMany({
+      where: {
+        isActive: true,
+        merchant: {
+          organizationId,
+          deletedAt: null
+        }
+      },
+      select: { providerType: true }
+    });
+    
+    const counts: Record<string, number> = {};
+    for (const p of providers) {
+      const pt = p.providerType.toUpperCase();
+      counts[pt] = (counts[pt] || 0) + 1;
+    }
+    return counts;
+  }
+
   async createMerchant(data: {
     organizationId: string;
     name: string;
@@ -70,8 +90,9 @@ export class MerchantService {
         `Creating merchant: ${data.name} for org: ${data.organizationId}`,
       );
 
-      // Check if there are available subscription slots
-      await this.checkSubscriptionSlotAvailable(data.organizationId);
+      // DEPRECATED: Merchant creation no longer consumes subscription slots.
+      // Slots are consumed when connecting a provider.
+      // await this.checkSubscriptionSlotAvailable(data.organizationId);
 
       const merchant = await this.prisma.merchant.create({
         data: {
@@ -90,13 +111,13 @@ export class MerchantService {
         },
       });
 
-      // Assign a subscription slot to this merchant
-      await this.assignSubscriptionSlot(
-        data.organizationId,
-        merchant.id,
-      ).catch((err) => {
-        this.logger.warn(`Failed to assign subscription slot: ${err.message}`);
-      });
+      // DEPRECATED: Subscription slots are assigned at provider connection time.
+      // await this.assignSubscriptionSlot(
+      //   data.organizationId,
+      //   merchant.id,
+      // ).catch((err) => {
+      //   this.logger.warn(`Failed to assign subscription slot: ${err.message}`);
+      // });
 
       this.logger.log(
         `✅ Merchant created: ${merchant.id} with status: ${merchant.status}`,
