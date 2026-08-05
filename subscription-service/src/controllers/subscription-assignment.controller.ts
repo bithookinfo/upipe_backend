@@ -92,19 +92,14 @@ export class SubscriptionAssignmentController {
 
         // Check if this is a metadata-only update (e.g., toggling visibility/features)
         const isMetadataOnlyUpdate = Object.keys(body).every(key => 
-            ['isActive', 'isPublic', 'isFeatured', 'sortOrder'].includes(key)
+            ['isPublic', 'isFeatured', 'sortOrder'].includes(key)
         );
 
         if (!isMetadataOnlyUpdate) {
             // Plan edit protection for core fields
             const activeSubscriptions = await this.prisma.orgSubscription.findMany({
                 where: {
-                    planId: id,
-                    status: 'ACTIVE',
-                    OR: [
-                        { endDate: null },
-                        { endDate: { gt: new Date() } }
-                    ]
+                    planId: id
                 },
                 select: { organizationId: true },
                 distinct: ['organizationId'],
