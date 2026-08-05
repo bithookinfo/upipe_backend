@@ -1643,11 +1643,20 @@ export class GpayService implements OnModuleDestroy {
     if (isVerifyItsYou) {
       this.logger.log(`"Verify it's you" interstitial detected. Clicking Next...`);
       try {
-        const nextBtn = await targetFrame.$('button:has-text("Next"), #identifierNext button, div[role="button"]:has-text("Next"), button:has-text("Continue")').catch(() => null);
-        if (nextBtn) {
-          await nextBtn.click();
-        } else {
-          // Fallback to keyboard on the main page if frame focus fails
+        const clicked = await targetFrame.evaluate(() => {
+          const btns = Array.from(document.querySelectorAll('button, div[role="button"], span'));
+          const nextBtn = btns.find(el => {
+            const txt = (el.textContent || '').trim().toLowerCase();
+            return txt === 'next' || txt === 'continue';
+          });
+          if (nextBtn) {
+            (nextBtn as HTMLElement).click();
+            return true;
+          }
+          return false;
+        }).catch(() => false);
+
+        if (!clicked) {
           await page.keyboard.press("Enter");
         }
         await new Promise((r) => setTimeout(r, 3000));
@@ -3079,8 +3088,8 @@ export class GpayService implements OnModuleDestroy {
       // Clear the last RPtkab load time so the next syncTransactions knows to wait for fresh data
       this.lastRPTkabLoadAt.delete(providerId);
 
-      // Poll for up to 5s (10 × 500ms) until RPtkab fires and repopulates the buffer with notes
-      const maxWaitMs = 5000;
+      // Poll for up to 30s (60 × 500ms) until RPtkab fires and repopulates the buffer with notes
+      const maxWaitMs = 30000;
       const pollInterval = 500;
       const polls = Math.ceil(maxWaitMs / pollInterval);
       for (let i = 0; i < polls; i++) {
@@ -3094,7 +3103,7 @@ export class GpayService implements OnModuleDestroy {
       }
 
       if (!this.lastRPTkabLoadAt.has(providerId)) {
-        this.logger.warn(`⚠️ [DIAGNOSTIC] RPtkab did not fire within 5s after refresh for ${providerId} — notes may still be missing`);
+        this.logger.warn(`⚠️ [DIAGNOSTIC] RPtkab did not fire within 30s after refresh for ${providerId} — notes may still be missing`);
       }
 
       return true;
