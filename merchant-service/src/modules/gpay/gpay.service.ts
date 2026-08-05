@@ -563,6 +563,10 @@ export class GpayService implements OnModuleDestroy {
           }
           // ---------------------------------
 
+          // --- FIX for "Verify it's you" Interstitial ---
+          await this.autoBypassVerifyItsYou(page);
+          // ---------------------------------
+
           // Check if we jumped straight to password field (happens if we clicked an existing account)
           // Also check if the email field is present but hidden, which usually indicates we are on the password step.
           const isEmailHidden = await page.evaluate(() => {
@@ -1385,6 +1389,15 @@ export class GpayService implements OnModuleDestroy {
       }
     }
 
+    // --- FIX for "Verify it's you" Interstitial during polling/challenge detection ---
+    if (await this.autoBypassVerifyItsYou(page)) {
+      try {
+        content = await page.content();
+        url = page.url();
+      } catch { }
+    }
+    // ---------------------------------
+
     const lowerTop = (content || "").toLowerCase();
     const isVerificationCodeFlow =
       lowerTop.includes("verification code") ||
@@ -1596,6 +1609,54 @@ export class GpayService implements OnModuleDestroy {
     return null;
 
     return null;
+  }
+
+  /**
+   * Automatically bypass the "Verify it's you" interstitial screen.
+   */
+  private async autoBypassVerifyItsYou(page: any): Promise<boolean> {
+    let isVerifyItsYou = false;
+    let targetFrame = page;
+
+    try {
+      const frames = typeof page.frames === 'function' ? page.frames() : [page];
+      for (const frame of frames) {
+        const url = frame.url() || "";
+        const isConfirmUrl = url.includes("signin/confirmidentifier") || url.includes("speedbump/idvreenable");
+        
+        const frameMatch = await frame.evaluate(() => {
+          const text = (document.body.innerText || "").toLowerCase();
+          return (text.includes("verify it's you") || text.includes("verify it’s you") || text.includes("verify it&#39;s you")) && 
+                 (text.includes("sign in again") || text.includes("keep your account secure") || text.includes("continue"));
+        }).catch(() => false);
+
+        if (isConfirmUrl || frameMatch) {
+          isVerifyItsYou = true;
+          targetFrame = frame;
+          break;
+        }
+      }
+    } catch (err) {
+      // Ignore frame errors
+    }
+
+    if (isVerifyItsYou) {
+      this.logger.log(`"Verify it's you" interstitial detected. Clicking Next...`);
+      try {
+        const nextBtn = await targetFrame.$('button:has-text("Next"), #identifierNext button, div[role="button"]:has-text("Next"), button:has-text("Continue")').catch(() => null);
+        if (nextBtn) {
+          await nextBtn.click();
+        } else {
+          // Fallback to keyboard on the main page if frame focus fails
+          await page.keyboard.press("Enter");
+        }
+        await new Promise((r) => setTimeout(r, 3000));
+        return true;
+      } catch (err: any) {
+        this.logger.warn("Failed to click Next on Verify it's you: " + err.message);
+      }
+    }
+    return false;
   }
 
   /**
