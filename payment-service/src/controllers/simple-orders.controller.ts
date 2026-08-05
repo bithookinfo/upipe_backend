@@ -467,16 +467,20 @@ export class OrdersService {
       });
 
       let connectorMap: Map<string, any> = new Map();
+      let merchantConnectorMap: Map<string, any> = new Map();
       try {
         const merchantServiceUrl = process.env.MERCHANT_SERVICE_URL;
         const axios = require("axios");
         const connectorsResponse = await axios.get(
-          `${merchantServiceUrl}/merchant/connectors`,
+          `${merchantServiceUrl}/merchant/connectors?includeInactive=true`,
           { headers: { "x-internal-token": process.env.INTERNAL_TOKEN } }
         );
         if (connectorsResponse.data?.connectors) {
           for (const connector of connectorsResponse.data.connectors) {
             connectorMap.set(connector.id, connector);
+            if (connector.merchantId) {
+              merchantConnectorMap.set(connector.merchantId, connector);
+            }
           }
         }
       } catch (err) {
@@ -499,6 +503,12 @@ export class OrdersService {
           providerType = connector.providerType;
           providerVpa = connector.upiId;
           providerLogo = connector.logo;
+        } else if (order.merchantId && merchantConnectorMap.has(order.merchantId)) {
+          const connector = merchantConnectorMap.get(order.merchantId);
+          connectorName = connector.displayName || connector.merchantName;
+          providerType = connector.providerType;
+          providerVpa = connector.upiId;
+          providerLogo = connector.logo;
         }
 
         const latestTransaction = order.transactions?.[0];
@@ -517,7 +527,7 @@ export class OrdersService {
         if (!providerType && providerVpa) {
           const suffix = providerVpa.split("@")[1]?.toLowerCase() || "";
           if (/ybl|ibl|axl/.test(suffix)) providerType = "PHONEPE";
-          else if (/okicici|okaxis|oksbi|okhdfc/.test(suffix)) providerType = "GPAY";
+          else if (/okicici|okaxis|oksbi|okhdfc|okbizaxis/.test(suffix)) providerType = "GPAY";
           else if (/pty|ptsbi|pthdfc|ptaxis|ptyes/.test(suffix)) providerType = "PAYTM";
           else if (/fbpe|bharatpe/.test(suffix)) providerType = "BHARATPE";
         }
@@ -595,20 +605,20 @@ export class OrdersService {
         let app = appRaw || providerRaw;
         if (!app) return;
 
-        if (app === "gpay" || app.includes("google") || app.includes("okicici") || app.includes("okaxis") || app.includes("oksbi") || app.includes("okhdfc") || /^up[0-9a-f]{8,}/i.test(app) || /^ucgy6/i.test(app)) {
+        if (app === "gpay" || app.includes("google") || app.includes("okicici") || app.includes("okaxis") || app.includes("oksbi") || app.includes("okhdfc") || app.includes("okbizaxis") || /^up[0-9a-f]{8,}/i.test(app) || /^ucgy6/i.test(app)) {
           appBreakdownStats.gpay.amount += amt; appBreakdownStats.gpay.count += count;
         } else if (app.includes("phonepe") || app.includes("phone pe") || app.includes("ybl") || app.includes("ibl") || app.includes("axl")) {
           appBreakdownStats.phonepe.amount += amt; appBreakdownStats.phonepe.count += count;
         } else if (app.includes("paytm") || app.includes("ptsbi") || app.includes("pthdfc") || app.includes("ptaxis") || app.includes("ptyes")) {
           appBreakdownStats.paytm.amount += amt; appBreakdownStats.paytm.count += count;
-        } else if (app.includes("bharatpe")) {
+        } else if (app.includes("bharatpe") || providerRaw.includes("bharatpe")) {
           appBreakdownStats.bharatpe.amount += amt; appBreakdownStats.bharatpe.count += count;
         } else if (app.includes("quintus")) {
           if (!appBreakdownStats.quintus) appBreakdownStats.quintus = { id: "quintus", name: "QuintusPay", logo: "/quintus/logo1.png", amount: 0, count: 0 };
           appBreakdownStats.quintus.amount += amt; appBreakdownStats.quintus.count += count;
         } else {
           // Identify junk or missing apps as Other UPI
-          const isJunk = app.startsWith("upsa") || app.startsWith("frfz") || app === "order" || app.length > 20 || !app.trim();
+          const isJunk = app.startsWith("upsa") || app.startsWith("frfz") || app === "order" || /^[a-z0-9]{12,30}$/i.test(app) || app.length > 20 || !app.trim();
           if (isJunk) {
             app = "other upi";
           }
@@ -620,6 +630,7 @@ export class OrdersService {
             else if (app.includes("axis")) { name = "Axis Bank"; logo = "/gateways/Axis.svg"; }
             else if (app.includes("yes")) { name = "YES Bank"; logo = "/gateways/YES.png"; }
             else if (app === "upi" || app === "other upi") { name = "Other UPI"; logo = "/UPI_Offical_Logo_result.webp"; }
+            else if (app === "bhim") { name = "BHIM"; logo = "/gateways/bhim.svg"; }
             else { name = app.charAt(0).toUpperCase() + app.slice(1); }
             appBreakdownStats[app] = { id: app, name, logo, amount: 0, count: 0 };
           }
@@ -628,7 +639,7 @@ export class OrdersService {
         }
       });
 
-      const defaults = defaultIds.map(id => appBreakdownStats[id]);
+      const defaults = defaultIds.map(id => appBreakdownStats[id]).filter(s => s.count > 0);
       const others = Object.values(appBreakdownStats)
         .filter(s => !defaultIds.includes(s.id) && s.count > 0)
         .sort((a, b) => b.count - a.count);

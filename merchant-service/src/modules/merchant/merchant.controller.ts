@@ -98,15 +98,28 @@ async devCheckGpay() {
   status: 200,
   description: "Connectors retrieved successfully",
 })
-async getConnectors(@Headers("x-organization-id") organizationId?: string) {
+async getConnectors(
+  @Headers("x-organization-id") organizationId?: string,
+  @Headers("x-internal-token") internalToken?: string,
+  @Query("includeInactive") includeInactive?: string
+) {
   try {
-    const merchants = organizationId
-      ? ((
-          await this.merchantService.getMerchantsByOrganization(
-            organizationId,
-          )
-        )?.merchants ?? [])
-      : [];
+    let merchants = [];
+    if (includeInactive === 'true') {
+      const { PrismaClient } = require('@prisma/client');
+      const prisma = new PrismaClient();
+      if (organizationId) {
+        merchants = await prisma.merchant.findMany({ where: { organizationId, isPlatform: false }, include: { providers: true } });
+      } else if (internalToken === process.env.INTERNAL_TOKEN) {
+        merchants = await prisma.merchant.findMany({ include: { providers: true } });
+      }
+    } else {
+      if (organizationId) {
+        merchants = (await this.merchantService.getMerchantsByOrganization(organizationId))?.merchants ?? [];
+      } else if (internalToken === process.env.INTERNAL_TOKEN) {
+        merchants = (await this.merchantService.getAllMerchants()) ?? [];
+      }
+    }
 
     const allConnectors: any[] = [];
     type MerchantWithProviders = (typeof merchants)[number] & {
@@ -121,10 +134,10 @@ async getConnectors(@Headers("x-organization-id") organizationId?: string) {
       }>;
     };
     for (const merchant of merchants as MerchantWithProviders[]) {
-      if (!merchant.isActive) continue; // Skip inactive merchants
+      if (!merchant.isActive && includeInactive !== 'true') continue; // Skip inactive merchants
       if (merchant.providers && merchant.providers.length > 0) {
         for (const provider of merchant.providers) {
-          if (provider.isActive) {
+          if (provider.isActive || includeInactive === 'true') {
             const metadata = (provider.metadata as any) || {};
             const credentials = (provider.credentials as any) || {};
             const extractedMerchantName =
