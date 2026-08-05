@@ -639,7 +639,7 @@ export class OrdersService {
         }
       });
 
-      const defaults = defaultIds.map(id => appBreakdownStats[id]).filter(s => s.count > 0);
+      const defaults = defaultIds.map(id => appBreakdownStats[id]);
       const others = Object.values(appBreakdownStats)
         .filter(s => !defaultIds.includes(s.id) && s.count > 0)
         .sort((a, b) => b.count - a.count);
