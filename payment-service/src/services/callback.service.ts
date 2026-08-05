@@ -257,7 +257,7 @@ export class CallbackService {
       const payloadString = JSON.stringify(payload);
 
       const response = await axios.post(order.callbackUrl, payload, {
-        timeout: 10000,
+        timeout: 15000,
         headers: {
           "Content-Type": "application/json",
           "User-Agent": "Upipe-Webhook/1.0",
