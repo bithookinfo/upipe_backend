@@ -255,7 +255,7 @@ export class RealSubscriptionService {
       const activeSlots = await this.prisma.orgSubscription.findMany({
         where: {
           organizationId,
-          status: 'ACTIVE',
+          status: { in: ['ACTIVE', 'UNASSIGNED'] },
           OR: [
             { endDate: null },
             { endDate: { gt: new Date() } }
