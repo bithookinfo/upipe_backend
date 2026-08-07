@@ -507,23 +507,30 @@ export class RealSubscriptionService {
       const data = entitlements.data[providerCode.toUpperCase()];
       if (!data) throw new BadRequestException(`No active entitlement for provider ${providerCode}`);
 
-      // Get current active reservations and filter expired ones
-      const resKey = `reservations:${organizationId}:${providerCode}`;
+      const pCode = providerCode.toUpperCase();
+      const resKey = `reservations:${organizationId}:${pCode}`;
       const activeReservationsStr = await redis.get(resKey);
       let activeReservations: Array<{ id: string, expiresAt: number }> = activeReservationsStr ? JSON.parse(activeReservationsStr) : [];
 
       const now = Date.now();
       activeReservations = activeReservations.filter(r => r.expiresAt > now);
 
-      if (data.allowed - data.used - activeReservations.length <= 0) {
+      const availableSlots = data.allowed - data.used;
+      if (availableSlots <= 0) {
         throw new BadRequestException(`No available slots for provider ${providerCode}`);
       }
 
+      // If availableSlots > 0 (org has entitlement capacity), but previous uncommitted attempts
+      // left reservations in Redis, clear them so the user is not blocked by abandoned attempts.
+      if (activeReservations.length >= availableSlots) {
+        activeReservations = [];
+      }
+
       const reservationId = require('crypto').randomUUID();
-      activeReservations.push({ id: reservationId, expiresAt: now + 5 * 60 * 1000 }); // 5 min TTL
+      activeReservations.push({ id: reservationId, expiresAt: now + 2 * 60 * 1000 }); // 2 min TTL
 
       // Store reservations and set TTL for the key
-      await redis.set(resKey, JSON.stringify(activeReservations), 'PX', 5 * 60 * 1000);
+      await redis.set(resKey, JSON.stringify(activeReservations), 'PX', 2 * 60 * 1000);
 
       return { reservationId };
     } finally {

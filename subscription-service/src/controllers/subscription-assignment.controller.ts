@@ -92,7 +92,7 @@ export class SubscriptionAssignmentController {
 
         // Check if this is a metadata-only update (e.g., toggling visibility/features)
         const isMetadataOnlyUpdate = Object.keys(body).every(key => 
-            ['isPublic', 'isFeatured', 'sortOrder'].includes(key)
+            ['isActive', 'isPublic', 'isFeatured', 'sortOrder'].includes(key)
         );
 
         if (!isMetadataOnlyUpdate) {

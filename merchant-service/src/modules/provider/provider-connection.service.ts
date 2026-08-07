@@ -1134,7 +1134,7 @@ export class ProviderConnectionService {
       });
       const autoAssignedSlotId = await this.getValidSubscriptionSlotId(
         data.organizationId,
-        ProviderType.GPAY,
+        ProviderType.PHONEPE,
         existingMerchantPre?.orgSubscriptionId,
         data.isSuperAdmin,
       );
@@ -1834,13 +1834,22 @@ export class ProviderConnectionService {
         { headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": organizationId } }
       );
 
-      const entitlements = response.data?.entitlements || [];
-      const data = entitlements.find((e: any) => e.providerCode === providerCode.toUpperCase());
+      const entitlementsData = response.data?.data || response.data?.entitlements || {};
+      let data: any = null;
 
-      if (!data || data.totalSlots === 0) {
+      if (Array.isArray(entitlementsData)) {
+        data = entitlementsData.find((e: any) => e.providerCode?.toUpperCase() === providerCode.toUpperCase());
+      } else if (typeof entitlementsData === 'object') {
+        data = entitlementsData[providerCode.toUpperCase()];
+      }
+
+      const allowed = data?.allowed ?? data?.totalSlots ?? 0;
+      const remaining = data?.remaining ?? data?.remainingSlots ?? 0;
+
+      if (!data || allowed === 0) {
         throw new BadRequestException(`Provider ${providerCode} is not available in your current subscription plan`);
       }
-      if (data.remainingSlots <= 0) {
+      if (remaining <= 0) {
         throw new BadRequestException(`No available slots for provider ${providerCode}. Please upgrade your plan.`);
       }
     } catch (error: any) {
