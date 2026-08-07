@@ -266,15 +266,18 @@ export class MerchantController {
       state?: string;
       pincode?: string;
       status?: string;
+      orgSubscriptionId?: string;
     },
     @Headers("x-user-type") userType?: string,
     @Headers("x-user-id") userId?: string,
+    @Headers("x-organization-id") headerOrgId?: string,
     @Headers("user-agent") userAgent?: string,
     @Ip() ipAddress?: string,
   ) {
     const isSuperAdmin = userType === 'superadmin' || userType === 'SUPER_ADMIN';
+    const trustedOrgId = headerOrgId || organizationId;
     const merchant = await this.merchantService.createMerchant({
-      organizationId,
+      organizationId: trustedOrgId,
       ...createMerchantDto,
       isSuperAdmin,
     });

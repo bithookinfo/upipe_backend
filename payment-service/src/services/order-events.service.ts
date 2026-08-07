@@ -12,6 +12,7 @@ export interface SseClient {
 export class OrderEventsService {
   private readonly logger = new Logger(OrderEventsService.name);
   private readonly clients = new Set<SseClient>();
+  private readonly recentBroadcasts = new Map<string, number>();
 
   constructor(private readonly inAppNotifications: InAppNotificationsService) {}
 
@@ -30,6 +31,19 @@ export class OrderEventsService {
     organizationId?: string,
     meta?: { externalOrderId?: string, isPlatform?: boolean },
   ): void {
+    const now = Date.now();
+    const lastBroadcast = this.recentBroadcasts.get(orderId);
+    if (lastBroadcast && now - lastBroadcast < 5000) {
+      this.logger.debug(`Suppressed duplicate broadcastOrderUpdated for orderId=${orderId}`);
+      return;
+    }
+    this.recentBroadcasts.set(orderId, now);
+    // Cleanup old cache entries (> 30s)
+    if (this.recentBroadcasts.size > 1000) {
+      for (const [k, v] of this.recentBroadcasts.entries()) {
+        if (now - v > 30000) this.recentBroadcasts.delete(k);
+      }
+    }
     const payload = JSON.stringify({ orderId, organizationId, event: 'order.updated' });
     const data = `event: order.updated\ndata: ${payload}\n\n`;
 

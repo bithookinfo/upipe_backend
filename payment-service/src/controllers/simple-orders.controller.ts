@@ -206,6 +206,11 @@ export class OrdersService {
                   { customerName: { contains: searchTerm } },
                   { customerContact: { contains: searchTerm } },
                   { bankRefNumber: { contains: searchTerm } },
+                  { providerResponse: { path: "$.issuerRefNo", equals: searchTerm } },
+                  { providerResponse: { path: "$.txnid", equals: searchTerm } },
+                  { providerResponse: { path: "$.utr", equals: searchTerm } },
+                  { providerResponse: { path: "$.merchantTransId", equals: searchTerm } },
+                  { providerResponse: { path: "$.providerReferenceId", equals: searchTerm } },
                 ],
               },
             },
@@ -532,7 +537,10 @@ export class OrdersService {
           else if (/fbpe|bharatpe/.test(suffix)) providerType = "BHARATPE";
         }
 
-        const utr = latestTransaction?.utr || order.utr || (order.metadata as any)?.utr;
+        const rawResponse = (latestTransaction?.providerResponse as any) || (order.metadata as any);
+        const utr = (rawResponse?.issuerRefNo && rawResponse?.issuerRefNo !== "NA")
+          ? rawResponse.issuerRefNo
+          : (latestTransaction?.utr || order.utr || (order.metadata as any)?.utr);
 
         // Derive paidBy similar to OrderDetails: prefer transaction customer name when available
         if (latestTransaction) {

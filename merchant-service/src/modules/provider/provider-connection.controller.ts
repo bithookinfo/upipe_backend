@@ -81,6 +81,8 @@ export class ProviderConnectionController {
     @Ip() ipAddress?: string,
   ) {
     if (organizationId) {
+      const isSuperAdmin = userType?.toUpperCase() === "SUPER_ADMIN" || userType?.toUpperCase() === "SUPERADMIN";
+      await this.providerService.checkProviderLimit(organizationId, "GPAY", isSuperAdmin);
       if (body.businessId) {
         await this.merchantService.validateDuplicateMerchantConnection(body.businessId, "GPAY", organizationId);
       }

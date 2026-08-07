@@ -12,35 +12,35 @@ model SubscriptionPlan {
   name        String @db.VarChar(100)
   code        String @unique @db.VarChar(50)
   description String? @db.Text
-  
+
   price        Decimal      @db.Decimal(10, 2)
   currency     String       @default("INR") @db.VarChar(3)
   billingCycle BillingCycle @default(MONTHLY) @map("billing_cycle")
   trialDays    Int          @default(0) @map("trial_days")
   durationDays Int?         @map("duration_days") // Custom duration in days
-  
+
   maxUsers       Int @default(5) @map("max_users")
   maxMerchants   Int @default(3) @map("max_merchants")
   maxTransactions Int @default(1000) @map("max_transactions") // Per month
   maxApiCalls    Int @default(10000) @map("max_api_calls")    // Per month
-  
+
   features Json? // { "multiProvider": true, "analytics": "advanced", ... }
-  
+
   isActive   Boolean @default(true) @map("is_active")
   isPublic   Boolean @default(true) @map("is_public")
   isFeatured Boolean @default(false) @map("is_featured")
   isTrial    Boolean @default(false) @map("is_trial")
   sortOrder  Int     @default(0) @map("sort_order")
-  
+
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
-  
+
   subscriptions  OrgSubscription[]
   purchases      SubscriptionPurchase[]
   providerAccess SubscriptionProviderAccess[]
   history        SubscriptionHistory[]
-  
+
   @@index([code])
   @@index([isActive])
   @@index([isTrial])
@@ -57,18 +57,17 @@ enum BillingCycle {
 
 /// Which providers are available in each subscription plan
 model SubscriptionProviderAccess {
-  id             String @id @default(uuid()) @db.VarChar(36)
-  planId         String @map("plan_id") @db.VarChar(36)
-  providerCode   String @map("provider_code") @db.VarChar(50)
-  
-  isIncluded     Boolean @default(true) @map("is_included")
-  slotsCount     Int     @default(1) @map("slots_count")
+  id           String @id @default(uuid()) @db.VarChar(36)
+  planId       String @map("plan_id") @db.VarChar(36)
+  providerCode String @map("provider_code") @db.VarChar(50)
 
-  
+  isIncluded Boolean @default(true) @map("is_included")
+  slotsCount Int     @default(1) @map("slots_count")
+
   createdAt DateTime @default(now()) @map("created_at")
-  
+
   plan SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
-  
+
   @@unique([planId, providerCode])
   @@index([planId])
   @@map("subscription_provider_access")
@@ -76,67 +75,92 @@ model SubscriptionProviderAccess {
 
 /// Subscription slot — one per purchased plan unit, assignable to a merchant
 model OrgSubscription {
-  id             String @id @default(uuid()) @db.VarChar(36)
-  organizationId String @map("organization_id") @db.VarChar(36)
-  planId         String @map("plan_id") @db.VarChar(36)
+  id             String  @id @default(uuid()) @db.VarChar(36)
+  organizationId String  @map("organization_id") @db.VarChar(36)
+  planId         String  @map("plan_id") @db.VarChar(36)
   merchantId     String? @map("merchant_id") @db.VarChar(36)
-  
-  status      SlotStatus @default(UNASSIGNED)
-  startDate   DateTime   @map("start_date")
-  endDate     DateTime?  @map("end_date")
-  autoRenew   Boolean    @default(true) @map("auto_renew")
-  
+
+  status    SlotStatus @default(UNASSIGNED)
+  startDate DateTime   @map("start_date")
+  endDate   DateTime?  @map("end_date")
+  autoRenew Boolean    @default(true) @map("auto_renew")
+
   // Custom limits override (if different from plan)
   customLimits Json? @map("custom_limits")
-  
+
   // Groups slots from the same purchase
   purchaseId        String? @map("purchase_id") @db.VarChar(36)
   purchaseUnitIndex Int?    @map("purchase_unit_index")
-  
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
-  
-  plan  SubscriptionPlan @relation(fields: [planId], references: [id])
-  
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  plan      SubscriptionPlan            @relation(fields: [planId], references: [id])
+  baselines SubscriptionUsageBaseline[]
+
+  @@unique([purchaseId, purchaseUnitIndex])
   @@index([planId])
   @@index([status])
   @@index([organizationId])
   @@index([organizationId, status])
   @@index([merchantId])
   @@index([purchaseId])
-  @@unique([purchaseId, purchaseUnitIndex])
   @@map("org_subscriptions")
+}
+
+model SubscriptionUsageBaseline {
+  id                String @id @default(uuid()) @db.VarChar(36)
+  orgSubscriptionId String @map("org_subscription_id") @db.VarChar(36)
+
+  cycleStart DateTime @map("cycle_start")
+  cycleEnd   DateTime @map("cycle_end")
+  cutoverAt  DateTime @map("cutover_at")
+
+  ordersUsed       Int    @default(0) @map("orders_used")
+  algorithmVersion String @default("LEGACY_CHRONOLOGICAL_V1") @map("algorithm_version") @db.VarChar(50)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  orgSubscription OrgSubscription @relation(fields: [orgSubscriptionId], references: [id])
+
+  @@unique([orgSubscriptionId, cycleStart, cycleEnd])
+  @@index([orgSubscriptionId])
+  @@index([cutoverAt])
+  @@map("subscription_usage_baselines")
 }
 
 enum SlotStatus {
   UNASSIGNED
   ACTIVE
   EXPIRED
+  DELETION_PENDING
+  CANCELLED
 }
 
 /// Tracks each purchase (1 purchase → N slots, linked to payment order)
 model SubscriptionPurchase {
-  id             String @id @default(uuid()) @db.VarChar(36)
-  organizationId String @map("organization_id") @db.VarChar(36)
-  planId         String @map("plan_id") @db.VarChar(36)
-  quantity       Int    @default(1)
+  id             String  @id @default(uuid()) @db.VarChar(36)
+  organizationId String  @map("organization_id") @db.VarChar(36)
+  planId         String  @map("plan_id") @db.VarChar(36)
+  quantity       Int     @default(1)
   totalAmount    Decimal @map("total_amount") @db.Decimal(10, 2)
-  
+
   // Link to payment-service order
-  paymentOrderId     String? @map("payment_order_id") @db.VarChar(36)
-  paymentExternalId  String? @map("payment_external_id") @db.VarChar(100)
-  paymentUtr         String? @map("payment_utr") @db.VarChar(100)
-  
-  status         PurchaseStatus @default(PENDING)
-  
-  completedAt    DateTime? @map("completed_at")
-  
-  createdAt      DateTime @default(now()) @map("created_at")
-  metadata       Json?     @map("metadata")
-  updatedAt      DateTime @updatedAt @map("updated_at")
-  
+  paymentOrderId    String? @map("payment_order_id") @db.VarChar(36)
+  paymentExternalId String? @map("payment_external_id") @db.VarChar(100)
+  paymentUtr        String? @map("payment_utr") @db.VarChar(100)
+
+  status PurchaseStatus @default(PENDING)
+
+  completedAt DateTime? @map("completed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  metadata  Json?    @map("metadata")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
   plan SubscriptionPlan @relation(fields: [planId], references: [id])
-  
+
   @@index([organizationId])
   @@index([status])
   @@index([paymentOrderId])
@@ -157,27 +181,27 @@ model PlatformConfig {
   id    String @id @default(uuid()) @db.VarChar(36)
   key   String @unique @db.VarChar(100)
   value Json
-  
+
   updatedAt DateTime @updatedAt @map("updated_at")
-  
+
   @@map("platform_config")
 }
 
 /// Audit trail of every plan subscription / switch / renewal
 model SubscriptionHistory {
-  id             String   @id @default(uuid()) @db.VarChar(36)
-  organizationId String   @map("organization_id") @db.VarChar(36)
-  planId         String   @map("plan_id") @db.VarChar(36)
-  planName       String   @map("plan_name") @db.VarChar(100)
-  planPrice      Decimal  @map("plan_price") @db.Decimal(10, 2)
-  billingCycle   String   @map("billing_cycle") @db.VarChar(20)
-  action         String   @db.VarChar(50) // SUBSCRIBED, UPGRADED, DOWNGRADED, RENEWED, PURCHASED
-  previousPlanId String?  @map("previous_plan_id") @db.VarChar(36)
-  previousPlanName String? @map("previous_plan_name") @db.VarChar(100)
-  gatewayTransactionId String? @map("gateway_transaction_id") @db.VarChar(100)
-  quantity       Int      @default(1)
-  status         String   @default("SUCCESS") @db.VarChar(20)
-  createdAt      DateTime @default(now()) @map("created_at")
+  id                   String   @id @default(uuid()) @db.VarChar(36)
+  organizationId       String   @map("organization_id") @db.VarChar(36)
+  planId               String   @map("plan_id") @db.VarChar(36)
+  planName             String   @map("plan_name") @db.VarChar(100)
+  planPrice            Decimal  @map("plan_price") @db.Decimal(10, 2)
+  billingCycle         String   @map("billing_cycle") @db.VarChar(20)
+  action               String   @db.VarChar(50) // SUBSCRIBED, UPGRADED, DOWNGRADED, RENEWED, PURCHASED
+  previousPlanId       String?  @map("previous_plan_id") @db.VarChar(36)
+  previousPlanName     String?  @map("previous_plan_name") @db.VarChar(100)
+  gatewayTransactionId String?  @map("gateway_transaction_id") @db.VarChar(100)
+  quantity             Int      @default(1)
+  status               String   @default("SUCCESS") @db.VarChar(20)
+  createdAt            DateTime @default(now()) @map("created_at")
 
   plan SubscriptionPlan @relation(fields: [planId], references: [id])
 
@@ -187,28 +211,28 @@ model SubscriptionHistory {
 }
 
 model MerchantUnlock {
-  id             String       @id @default(uuid()) @db.VarChar(36)
-  organizationId String       @map("organization_id") @db.VarChar(36)
-  merchantType   String       @map("merchant_type") @db.VarChar(50) // BHARATPE, GPAY, etc.
-  
-  unlockType     String       @default("LIFETIME") @map("unlock_type") @db.VarChar(20)
-  status         UnlockStatus @default(ACTIVE)
-  
+  id             String @id @default(uuid()) @db.VarChar(36)
+  organizationId String @map("organization_id") @db.VarChar(36)
+  merchantType   String @map("merchant_type") @db.VarChar(50) // BHARATPE, GPAY, etc.
+
+  unlockType String       @default("LIFETIME") @map("unlock_type") @db.VarChar(20)
+  status     UnlockStatus @default(ACTIVE)
+
   // Link to purchase (null if granted by super-admin)
-  purchaseId     String?      @map("purchase_id") @db.VarChar(36)
-  
+  purchaseId String? @map("purchase_id") @db.VarChar(36)
+
   // Pricing at time of purchase
-  pricePaid      Decimal?     @map("price_paid") @db.Decimal(10, 2)
-  currency       String?      @default("INR") @db.VarChar(3)
-  
-  grantedBy      String?      @map("granted_by") @db.VarChar(100) // "PURCHASE" | "SUPER_ADMIN" | "MIGRATION"
-  
-  unlockedAt     DateTime     @default(now()) @map("unlocked_at")
-  revokedAt      DateTime?    @map("revoked_at")
-  
-  createdAt      DateTime     @default(now()) @map("created_at")
-  updatedAt      DateTime     @updatedAt @map("updated_at")
-  
+  pricePaid Decimal? @map("price_paid") @db.Decimal(10, 2)
+  currency  String?  @default("INR") @db.VarChar(3)
+
+  grantedBy String? @map("granted_by") @db.VarChar(100) // "PURCHASE" | "SUPER_ADMIN" | "MIGRATION"
+
+  unlockedAt DateTime  @default(now()) @map("unlocked_at")
+  revokedAt  DateTime? @map("revoked_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
   @@unique([organizationId, merchantType])
   @@index([organizationId])
   @@index([merchantType])
@@ -222,37 +246,37 @@ enum UnlockStatus {
 }
 
 model MerchantUnlockProduct {
-  id            String   @id @default(uuid()) @db.VarChar(36)
-  merchantType  String   @unique @map("merchant_type") @db.VarChar(50)
-  displayName   String   @map("display_name") @db.VarChar(100)
-  description   String?  @db.VarChar(255)
-  
-  price         Decimal  @db.Decimal(10, 2)
-  currency      String   @default("INR") @db.VarChar(3)
-  
-  isActive      Boolean  @default(true) @map("is_active")
-  sortOrder     Int      @default(0) @map("sort_order")
-  
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
-  
+  id           String  @id @default(uuid()) @db.VarChar(36)
+  merchantType String  @unique @map("merchant_type") @db.VarChar(50)
+  displayName  String  @map("display_name") @db.VarChar(100)
+  description  String? @db.VarChar(255)
+
+  price    Decimal @db.Decimal(10, 2)
+  currency String  @default("INR") @db.VarChar(3)
+
+  isActive  Boolean @default(true) @map("is_active")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
   @@index([isActive])
   @@map("merchant_unlock_products")
 }
 
 model MerchantUnlockPurchase {
-  id             String   @id @default(uuid()) @db.VarChar(36)
-  organizationId String   @map("organization_id") @db.VarChar(36)
-  merchantType   String   @map("merchant_type") @db.VarChar(50)
-  totalAmount    Decimal  @map("total_amount") @db.Decimal(10, 2)
-  status         String   @default("PENDING") @db.VarChar(20)
-  
+  id             String  @id @default(uuid()) @db.VarChar(36)
+  organizationId String  @map("organization_id") @db.VarChar(36)
+  merchantType   String  @map("merchant_type") @db.VarChar(50)
+  totalAmount    Decimal @map("total_amount") @db.Decimal(10, 2)
+  status         String  @default("PENDING") @db.VarChar(20)
+
   paymentOrderId    String? @map("payment_order_id") @db.VarChar(100)
   paymentExternalId String? @map("payment_external_id") @db.VarChar(100)
   paymentUtr        String? @map("payment_utr") @db.VarChar(100)
-  
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([organizationId])
   @@index([paymentExternalId])
@@ -260,12 +284,12 @@ model MerchantUnlockPurchase {
 }
 
 model MonthlyUsage {
-  id            String   @id @default(uuid()) @db.VarChar(36)
-  orgId         String   @map("org_id") @db.VarChar(36)
-  billingMonth  String   @map("billing_month") @db.VarChar(7) // YYYY-MM
-  orderCount    Int      @default(0) @map("order_count")
-  
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  id           String @id @default(uuid()) @db.VarChar(36)
+  orgId        String @map("org_id") @db.VarChar(36)
+  billingMonth String @map("billing_month") @db.VarChar(7) // YYYY-MM
+  orderCount   Int    @default(0) @map("order_count")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@unique([orgId, billingMonth])
   @@index([orgId])
@@ -273,11 +297,11 @@ model MonthlyUsage {
 }
 
 model UsageAlert {
-  id            String   @id @default(uuid()) @db.VarChar(36)
-  orgId         String   @map("org_id") @db.VarChar(36)
-  billingMonth  String   @map("billing_month") @db.VarChar(7) // YYYY-MM
-  milestone     Int      // 70, 80, 90, 100
-  emailSentAt   DateTime @default(now()) @map("email_sent_at")
+  id           String   @id @default(uuid()) @db.VarChar(36)
+  orgId        String   @map("org_id") @db.VarChar(36)
+  billingMonth String   @map("billing_month") @db.VarChar(7) // YYYY-MM
+  milestone    Int // 70, 80, 90, 100
+  emailSentAt  DateTime @default(now()) @map("email_sent_at")
 
   @@unique([orgId, billingMonth, milestone])
   @@index([orgId])

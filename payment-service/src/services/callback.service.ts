@@ -268,6 +268,36 @@ export class CallbackService {
 
       const duration = Date.now() - startTime;
 
+      const isBusinessFailure = this.isClientBusinessLogicFailure(response.data);
+
+      if (isBusinessFailure && retryCount < 3) {
+        const nextRetryAt = new Date(Date.now() + 30 * 1000); // 30 seconds auto-retry
+        this.logger.warn(
+          `⚠️ Client endpoint returned "status": false in HTTP 200 body for ${order.externalOrderId}. Scheduling auto-retry in 30s (Attempt ${retryCount + 1}).`,
+        );
+
+        await this.prisma.order.update({
+          where: { id: order.id },
+          data: {
+            webhookSent: false,
+          },
+        });
+
+        await this.prisma.callbackLog.create({
+          data: {
+            orderId: order.id,
+            callbackUrl: order.callbackUrl,
+            payload: payload,
+            response: response.data,
+            statusCode: response.status,
+            success: false,
+            retryCount: retryCount,
+            nextRetryAt: nextRetryAt,
+          },
+        });
+        return;
+      }
+
       await this.prisma.order.update({
         where: { id: order.id },
         data: {
@@ -483,5 +513,36 @@ export class CallbackService {
 
     await this.sendWebhookToMerchant(order, 0);
     return { success: true, message: "Webhook sent" };
+  }
+
+  private isClientBusinessLogicFailure(responseData: any): boolean {
+    if (!responseData) return false;
+    let dataObj: any = responseData;
+    if (typeof responseData === "string") {
+      try {
+        dataObj = JSON.parse(responseData);
+      } catch (e) {
+        if (
+          responseData.includes('"status":false') ||
+          responseData.includes('"status": false') ||
+          responseData.includes('"success":false') ||
+          responseData.includes('"success": false')
+        ) {
+          return true;
+        }
+        return false;
+      }
+    }
+    if (typeof dataObj === "object" && dataObj !== null) {
+      if (
+        dataObj.status === false ||
+        dataObj.status === "false" ||
+        dataObj.success === false ||
+        dataObj.success === "false"
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 }

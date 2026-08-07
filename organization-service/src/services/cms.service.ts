@@ -50,8 +50,16 @@ export class CmsService {
   }
 
   async getPageBySlug(slug: string) {
-    const page = await this.prisma.cmsPage.findUnique({
-      where: { slug },
+    const cleanSlug = slug.startsWith('/') ? slug.substring(1) : slug;
+    const page = await this.prisma.cmsPage.findFirst({
+      where: {
+        OR: [
+          { slug: cleanSlug },
+          { slug: `/${cleanSlug}` },
+          { url: `/${cleanSlug}` },
+          { url: cleanSlug }
+        ]
+      },
       include: { sections: { where: { isVisible: true }, orderBy: { order: 'asc' } } },
     });
     if (!page || page.status?.toLowerCase() !== 'published') throw new NotFoundException('Page not found');
@@ -64,14 +72,31 @@ export class CmsService {
     };
   }
 
+  private sanitizeHtml(html?: string): string | undefined {
+    if (!html || typeof html !== 'string') return html;
+    return html
+      .replace(/on\w+\s*=\s*(["'])[\s\S]*?\1/gi, '')
+      .replace(/on\w+\s*=\s*[^>\s]+/gi, '')
+      .replace(/href\s*=\s*(["'])\s*javascript:[\s\S]*?\1/gi, 'href="#"')
+      .replace(/src\s*=\s*(["'])\s*javascript:[\s\S]*?\1/gi, '');
+  }
+
   async createPage(data: any) {
     const { sections, id, createdAt, updatedAt, ...pageData } = data;
+    pageData.content = typeof pageData.content === 'string' 
+      ? this.sanitizeHtml(pageData.content) 
+      : JSON.stringify(pageData.content || '');
     return this.prisma.cmsPage.create({ data: pageData });
   }
 
   async updatePage(id: string, data: any) {
     const { sections, createdAt, updatedAt, ...pageData } = data;
     delete pageData.id;
+    if (pageData.content !== undefined) {
+      pageData.content = typeof pageData.content === 'string' 
+        ? this.sanitizeHtml(pageData.content) 
+        : JSON.stringify(pageData.content || '');
+    }
     await this.getPageById(id);
     return this.prisma.cmsPage.update({ where: { id }, data: pageData });
   }
@@ -226,13 +251,12 @@ export class CmsService {
   }
 
   async createNavigation(data: any) {
-    const { id, createdAt, updatedAt, ...navData } = data;
+    const { id, createdAt, updatedAt, footerCategory, children, ...navData } = data;
     return this.prisma.cmsNavigation.create({ data: navData });
   }
 
   async updateNavigation(id: string, data: any) {
-    const { createdAt, updatedAt, ...navData } = data;
-    delete navData.id;
+    const { id: _, createdAt, updatedAt, footerCategory, children, ...navData } = data;
     await this.getNavigationById(id);
     return this.prisma.cmsNavigation.update({ where: { id }, data: navData });
   }
@@ -266,13 +290,12 @@ export class CmsService {
   }
 
   async createFooterCategory(data: any) {
-    const { id, createdAt, updatedAt, ...catData } = data;
+    const { id, createdAt, updatedAt, navigationItems, ...catData } = data;
     return this.prisma.cmsFooterCategory.create({ data: catData });
   }
 
   async updateFooterCategory(id: string, data: any) {
-    const { createdAt, updatedAt, ...catData } = data;
-    delete catData.id;
+    const { id: _, createdAt, updatedAt, navigationItems, ...catData } = data;
     await this.getFooterCategoryById(id);
     return this.prisma.cmsFooterCategory.update({ where: { id }, data: catData });
   }
@@ -570,46 +593,81 @@ export class CmsService {
   // BLOGS
   // =============================================
 
+  private formatBlog(blog: any) {
+    if (!blog) return blog;
+    let content = blog.content;
+    if (typeof content === 'string' && (content.startsWith('{') || content.startsWith('['))) {
+      try {
+        content = JSON.parse(content);
+      } catch (e) {
+        // Keep original string if parse fails
+      }
+    }
+    return { ...blog, content };
+  }
+
   async getBlogs(status?: string) {
     const where: any = {};
     if (status) where.status = status;
-    return this.prisma.cmsBlog.findMany({
+    const blogs = await this.prisma.cmsBlog.findMany({
       where,
       orderBy: { createdAt: 'desc' },
     });
+    return blogs.map(b => this.formatBlog(b));
   }
 
   async getBlogById(id: string) {
     const blog = await this.prisma.cmsBlog.findUnique({ where: { id } });
     if (!blog) throw new NotFoundException('Blog not found');
-    return blog;
+    return this.formatBlog(blog);
   }
 
   async getBlogBySlug(slug: string) {
-    const blog = await this.prisma.cmsBlog.findUnique({ where: { slug } });
-    if (!blog || blog.status !== 'published') throw new NotFoundException('Blog not found');
-    return blog;
+    const rawSlug = decodeURIComponent(slug);
+    const cleanSlug = rawSlug.startsWith('/') ? rawSlug.substring(1) : rawSlug;
+    const blog = await this.prisma.cmsBlog.findFirst({
+      where: {
+        OR: [
+          { slug: rawSlug },
+          { slug: cleanSlug },
+          { slug: `/${cleanSlug}` }
+        ]
+      }
+    });
+    if (!blog || blog.status?.toLowerCase() !== 'published') throw new NotFoundException('Blog not found');
+    return this.formatBlog(blog);
   }
 
   async getPublishedBlogs() {
-    return this.prisma.cmsBlog.findMany({
-      where: { status: 'published' },
+    const blogs = await this.prisma.cmsBlog.findMany({
+      where: { status: { in: ['published', 'Published'] } },
       orderBy: { publishedAt: 'desc' },
     });
+    return blogs.map(b => this.formatBlog(b));
   }
 
   async createBlog(data: any) {
     const { id, createdAt, updatedAt, ...blogData } = data;
     if (blogData.publishedAt) blogData.publishedAt = new Date(blogData.publishedAt);
-    return this.prisma.cmsBlog.create({ data: blogData });
+    blogData.content = typeof blogData.content === 'string'
+      ? this.sanitizeHtml(blogData.content)
+      : JSON.stringify(blogData.content || '');
+    const created = await this.prisma.cmsBlog.create({ data: blogData });
+    return this.formatBlog(created);
   }
 
   async updateBlog(id: string, data: any) {
     const { createdAt, updatedAt, ...blogData } = data;
     delete blogData.id;
     if (blogData.publishedAt) blogData.publishedAt = new Date(blogData.publishedAt);
+    if (blogData.content !== undefined) {
+      blogData.content = typeof blogData.content === 'string'
+        ? this.sanitizeHtml(blogData.content)
+        : JSON.stringify(blogData.content || '');
+    }
     await this.getBlogById(id);
-    return this.prisma.cmsBlog.update({ where: { id }, data: blogData });
+    const updated = await this.prisma.cmsBlog.update({ where: { id }, data: blogData });
+    return this.formatBlog(updated);
   }
 
   async deleteBlog(id: string) {

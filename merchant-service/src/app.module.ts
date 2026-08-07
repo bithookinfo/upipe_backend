@@ -30,6 +30,7 @@ import { OrderStatusCronService } from "./modules/transaction/order-status-cron.
 import { MerchantLimitResetCron } from "./modules/merchant/merchant-limit-reset.cron";
 import { StatsController } from "./stats/stats.controller";
 import { MerchantsController } from "./controllers/merchants.controller";
+import { InternalMerchantsController } from "./controllers/internal-merchants.controller";
 import { RoutingController } from "./modules/routing/routing.controller";
 import { RoutingService } from "./modules/routing/routing.service";
 import { PlatformMerchantExpiryCron } from "./modules/merchant/platform-merchant-expiry.cron";
@@ -54,6 +55,7 @@ import { GpayModule } from "./modules/gpay/gpay.module";
     ConfigTemplateController,
     StatsController,
     MerchantsController,
+    InternalMerchantsController,
     RoutingController,
   ],
   providers: [

@@ -214,11 +214,11 @@ export class GatewayController {
 
     const providerCode = providerId.toLowerCase();
 
-    if (body.phoneNumber && body.organizationId) {
+    if (body.phoneNumber) {
       await this.providerService.checkDuplicatePhoneForProvider(
         body.phoneNumber,
         providerCode.toUpperCase(),
-        body.organizationId
+        body.merchantId || null
       );
     }
 
@@ -232,7 +232,7 @@ export class GatewayController {
           throw new BadRequestException("Organization ID is required"); // Should enforce it
         }
         return this.providerService.sendPhonePeOtp(
-          null,
+          body.merchantId || null,
           body.phoneNumber,
           body.organizationId,
           isSuperAdmin,
@@ -486,6 +486,7 @@ export class GatewayController {
     if (!body.organizationId) {
       throw new BadRequestException("Organization ID is required.");
     }
+    await this.providerService.checkProviderLimit(body.organizationId, "PHONEPE", isSuperAdmin);
 
     const merchantId = body.merchantId || "temp-" + Date.now();
 
@@ -587,6 +588,7 @@ export class GatewayController {
     const isSuperAdmin = body.isSuperAdmin === true || 
       (userType && (userType.toUpperCase() === "SUPER_ADMIN" || userType.toUpperCase() === "SUPERADMIN"));
     if (body.organizationId) {
+      await this.providerService.checkProviderLimit(body.organizationId, "GPAY", isSuperAdmin);
       if (body.upiId) {
         await this.merchantService.validateDuplicateMerchantConnection(body.upiId, "GPAY", body.organizationId);
       }

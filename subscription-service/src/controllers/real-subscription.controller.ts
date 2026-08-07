@@ -44,6 +44,19 @@ export class RealSubscriptionController implements OnModuleInit {
     return this.realSubscriptionService.getOrganizationSubscription(organizationId, isSuperAdmin === 'true');
   }
 
+  @Get('organizations/:organizationId/assignable')
+  @ApiOperation({ summary: 'Get assignable purchased plan units for merchant assignment' })
+  @ApiParam({ name: 'organizationId', description: 'Organization ID' })
+  async getAssignableSubscriptions(
+    @Param('organizationId') organizationId: string,
+    @Headers('x-organization-id') reqOrgId?: string,
+    @Headers('x-user-type') userType?: string,
+    @Headers('x-is-super-admin') isSuperAdmin?: string
+  ) {
+    this.validateAccess(organizationId, reqOrgId, isSuperAdmin, userType);
+    return this.realSubscriptionService.getAssignableSubscriptions(organizationId);
+  }
+
   @Post('organizations/:organizationId/assign-trial')
   @ApiOperation({ summary: 'Assign a free trial subscription to an organization' })
   @ApiParam({ name: 'organizationId', description: 'Organization ID' })
@@ -69,7 +82,19 @@ export class RealSubscriptionController implements OnModuleInit {
     @Headers('x-is-super-admin') isSuperAdmin?: string
   ) {
     this.validateAccess(organizationId, reqOrgId, isSuperAdmin, userType);
-    return this.realSubscriptionService.getProviderEntitlements(organizationId);
+    const result = await this.realSubscriptionService.getProviderEntitlements(organizationId);
+    
+    if (result.success && result.data) {
+      const entitlementsArray = Object.keys(result.data).map(code => ({
+        providerCode: code,
+        totalSlots: result.data[code].allowed,
+        usedSlots: result.data[code].used,
+        remainingSlots: result.data[code].remaining
+      }));
+      return { success: true, entitlements: entitlementsArray };
+    }
+    
+    return result;
   }
 
   @Post('organizations/:organizationId/reserve')
@@ -148,46 +173,6 @@ export class RealSubscriptionController implements OnModuleInit {
 
   // ─── MERCHANT SLOT MANAGEMENT ──────────────────────────────
 
-  @Get('organizations/:organizationId/can-connect')
-  @ApiOperation({ summary: 'Check if org can connect a new merchant (has unassigned slots)' })
-  @ApiParam({ name: 'organizationId', description: 'Organization ID' })
-  async canConnectMerchant(
-    @Param('organizationId') organizationId: string,
-    @Headers('x-organization-id') reqOrgId?: string,
-    @Headers('x-user-type') userType?: string,
-    @Headers('x-is-super-admin') isSuperAdmin?: string
-  ) {
-    this.validateAccess(organizationId, reqOrgId, isSuperAdmin, userType);
-    return this.realSubscriptionService.checkCanConnectMerchant(organizationId);
-  }
-
-  @Post('organizations/:organizationId/assign-slot')
-  @ApiOperation({ summary: 'Assign an available slot to a merchant' })
-  @ApiParam({ name: 'organizationId', description: 'Organization ID' })
-  async assignSlot(
-    @Param('organizationId') organizationId: string,
-    @Body() body: { merchantId: string, slotId?: string },
-    @Headers('x-organization-id') reqOrgId?: string,
-    @Headers('x-user-type') userType?: string,
-    @Headers('x-is-super-admin') isSuperAdmin?: string
-  ) {
-    this.validateAccess(organizationId, reqOrgId, isSuperAdmin, userType);
-    return this.realSubscriptionService.assignSlotToMerchant(organizationId, body.merchantId, body.slotId);
-  }
-
-  @Post('organizations/:organizationId/unassign-slot')
-  @ApiOperation({ summary: 'Free a slot when merchant is deleted' })
-  @ApiParam({ name: 'organizationId', description: 'Organization ID' })
-  async unassignSlot(
-    @Param('organizationId') organizationId: string,
-    @Body() body: { merchantId: string },
-    @Headers('x-organization-id') reqOrgId?: string,
-    @Headers('x-user-type') userType?: string,
-    @Headers('x-is-super-admin') isSuperAdmin?: string
-  ) {
-    this.validateAccess(organizationId, reqOrgId, isSuperAdmin, userType);
-    return this.realSubscriptionService.unassignSlot(body.merchantId);
-  }
 
   @Delete('organizations/:organizationId/slots/:slotId')
   @ApiOperation({ summary: 'Delete a subscription slot manually' })
@@ -196,12 +181,13 @@ export class RealSubscriptionController implements OnModuleInit {
   async deleteSlot(
     @Param('organizationId') organizationId: string,
     @Param('slotId') slotId: string,
+    @Query('forceDeleteMerchant') forceDeleteMerchant?: string,
     @Headers('x-organization-id') reqOrgId?: string,
     @Headers('x-user-type') userType?: string,
     @Headers('x-is-super-admin') isSuperAdmin?: string
   ) {
     this.validateAccess(organizationId, reqOrgId, isSuperAdmin, userType);
-    return this.realSubscriptionService.deleteSlot(slotId);
+    return this.realSubscriptionService.deleteSlot(slotId, organizationId, forceDeleteMerchant === 'true');
   }
 
   // ─── PROVIDER ACCESS ───────────────────────────────────────
@@ -300,7 +286,7 @@ export class RealSubscriptionController implements OnModuleInit {
       stats: {
         currentMonth: {
           usersCreated: 0,
-          merchantsCreated: summary?.activeSlots || 0,
+          merchantsCreated: subscription.currentUsage?.merchantsCreated || 0,
           transactionsCount: 0,
           apiCallsCount: 0,
         },
@@ -329,11 +315,6 @@ export class RealSubscriptionController implements OnModuleInit {
       return { success: true, allowed: true, reason: 'Super Admin Bypass' };
     }
 
-    // For merchant creation, use slot-based check
-    if (body.action === 'CREATE_MERCHANT') {
-      const result = await this.realSubscriptionService.checkCanConnectMerchant(organizationId);
-      return { success: true, allowed: result.allowed, reason: result.message };
-    }
 
     // For other actions, check if org has any active subscription
     const subData = await this.realSubscriptionService.getOrganizationSubscription(organizationId);

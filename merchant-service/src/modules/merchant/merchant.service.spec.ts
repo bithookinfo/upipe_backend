@@ -1,7 +1,8 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { MerchantService } from "./merchant.service";
 import { PrismaService } from "../../prisma/prisma.service";
-import { NotFoundException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { NotFoundException, BadRequestException, ServiceUnavailableException, InternalServerErrorException } from "@nestjs/common";
 import {
   createMockPrismaService,
   createMockMerchant,
@@ -14,9 +15,20 @@ const mockedAxios = axios as jest.Mocked<typeof axios>;
 describe("MerchantService", () => {
   let service: MerchantService;
   let prismaService: any;
+  let configService: any;
 
   beforeEach(async () => {
     prismaService = createMockPrismaService();
+    prismaService.merchant.findFirst = jest.fn();
+    mockedAxios.isAxiosError = jest.fn().mockReturnValue(false) as any;
+    configService = {
+      get: jest.fn().mockImplementation((key) => {
+        if (key === 'PLAN_ASSIGNMENT_ENFORCEMENT_ENABLED') return 'false';
+        if (key === 'SUBSCRIPTION_SERVICE_URL') return 'http://subscription-service';
+        if (key === 'INTERNAL_TOKEN') return 'valid-token';
+        return undefined;
+      }),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -24,6 +36,10 @@ describe("MerchantService", () => {
         {
           provide: PrismaService,
           useValue: prismaService,
+        },
+        {
+          provide: ConfigService,
+          useValue: configService,
         },
       ],
     }).compile();
@@ -60,6 +76,87 @@ describe("MerchantService", () => {
     });
   });
 
+  describe("createMerchant", () => {
+    const createDto = {
+      organizationId: "org-1",
+      name: "New Merchant",
+      status: "PENDING",
+      isSuperAdmin: false,
+    };
+
+    it("should create a new merchant successfully with null plan if flag is false and no plan supplied", async () => {
+      configService.get.mockImplementation((k) => k === 'PLAN_ASSIGNMENT_ENFORCEMENT_ENABLED' ? 'false' : undefined);
+      prismaService.merchant.create.mockResolvedValue({ id: "m-new", ...createDto, orgSubscriptionId: null });
+
+      const result = await service.createMerchant(createDto as any);
+
+      expect(result.success).toBe(true);
+      expect(prismaService.merchant.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ orgSubscriptionId: null }),
+      });
+    });
+
+    it("should throw 400 if enforcement is true, plan is missing, and not a platform merchant", async () => {
+      configService.get.mockImplementation((k) => k === 'PLAN_ASSIGNMENT_ENFORCEMENT_ENABLED' ? 'true' : undefined);
+      await expect(service.createMerchant(createDto as any)).rejects.toThrow(BadRequestException);
+    });
+
+    it("should create a platform merchant with null plan even if enforcement is true", async () => {
+      configService.get.mockImplementation((k) => k === 'PLAN_ASSIGNMENT_ENFORCEMENT_ENABLED' ? 'true' : undefined);
+      prismaService.merchant.create.mockResolvedValue({ id: "m-new", ...createDto, isPlatform: true, orgSubscriptionId: null });
+
+      const result = await service.createMerchant({ ...createDto, isSuperAdmin: true } as any);
+
+      expect(result.success).toBe(true);
+      expect(prismaService.merchant.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ orgSubscriptionId: null, isPlatform: true }),
+      });
+    });
+
+    it("should throw 503 if subscription-service configuration is missing", async () => {
+      configService.get.mockReturnValue(undefined); // No token or URL
+      await expect(service.createMerchant({ ...createDto, orgSubscriptionId: "sub-1" } as any))
+        .rejects.toThrow(ServiceUnavailableException);
+    });
+
+    it("should validate and persist valid plan from same organization", async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: { assignable: true } });
+      prismaService.merchant.create.mockResolvedValue({ id: "m-new", ...createDto, orgSubscriptionId: "sub-1" });
+
+      const result = await service.createMerchant({ ...createDto, orgSubscriptionId: "sub-1" } as any);
+
+      expect(result.success).toBe(true);
+      expect(mockedAxios.get).toHaveBeenCalled();
+      expect(prismaService.merchant.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ orgSubscriptionId: "sub-1" }),
+      });
+    });
+
+    it("should reject cross-organization plan with 404 SUBSCRIPTION_NOT_FOUND", async () => {
+      (mockedAxios.isAxiosError as any).mockReturnValueOnce(true);
+      const axiosError: any = new Error('Not found');
+      axiosError.isAxiosError = true;
+      axiosError.response = { status: 404 };
+      mockedAxios.get.mockRejectedValueOnce(axiosError);
+      await expect(service.createMerchant({ ...createDto, orgSubscriptionId: "sub-x" } as any))
+        .rejects.toThrow(NotFoundException);
+    });
+
+    it("should reject expired/future plan with 400 SUBSCRIPTION_NOT_ASSIGNABLE", async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: { assignable: false, reasonCode: "SUBSCRIPTION_EXPIRED" } });
+      await expect(service.createMerchant({ ...createDto, orgSubscriptionId: "sub-exp" } as any))
+        .rejects.toThrow(BadRequestException);
+    });
+
+    it("should not partially assign if prisma create fails", async () => {
+      mockedAxios.get.mockResolvedValueOnce({ data: { assignable: true } });
+      prismaService.merchant.create.mockRejectedValueOnce(new Error("DB Error"));
+
+      await expect(service.createMerchant({ ...createDto, orgSubscriptionId: "sub-1" } as any))
+        .rejects.toThrow(InternalServerErrorException);
+    });
+  });
+
   describe("getMerchant", () => {
     it("should return merchant by id", async () => {
       const mockMerchant = {
@@ -68,18 +165,18 @@ describe("MerchantService", () => {
         category: null,
         providers: [],
       };
-      prismaService.merchant.findUnique.mockResolvedValue(mockMerchant);
+      prismaService.merchant.findFirst.mockResolvedValue(mockMerchant);
 
-      const result = await service.getMerchant("merchant-123");
+      const result = await service.getMerchant("merchant-123", "org-123");
 
       expect(result.success).toBe(true);
       expect(result.merchant.id).toBe("merchant-123");
     });
 
     it("should throw NotFoundException if merchant not found", async () => {
-      prismaService.merchant.findUnique.mockResolvedValue(null);
+      prismaService.merchant.findFirst.mockResolvedValue(null);
 
-      await expect(service.getMerchant("nonexistent")).rejects.toThrow(
+      await expect(service.getMerchant("nonexistent", "org-123")).rejects.toThrow(
         NotFoundException,
       );
     });
@@ -105,33 +202,7 @@ describe("MerchantService", () => {
     });
   });
 
-  describe("createMerchant", () => {
-    it("should create new merchant", async () => {
-      const createDto = {
-        organizationId: "org-123",
-        name: "Test Merchant",
-        businessName: "Test Business",
-        email: "test@merchant.com",
-      };
-      const mockMerchant = createMockMerchant(createDto);
 
-      // Mock subscription check (axios call)
-      mockedAxios.get.mockResolvedValue({
-        data: { allowed: true },
-      });
-      mockedAxios.post.mockResolvedValue({
-        data: { success: true },
-      });
-
-      prismaService.merchant.create.mockResolvedValue(mockMerchant);
-
-      const result = await service.createMerchant(undefined as any, createDto);
-
-      expect(result.success).toBe(true);
-      expect(result.merchant.name).toBe("Test Merchant");
-      expect(prismaService.merchant.create).toHaveBeenCalled();
-    });
-  });
 
   describe("validateMerchantForTransaction", () => {
     it("should return canProcess true for valid merchant", async () => {
@@ -159,10 +230,11 @@ describe("MerchantService", () => {
         category: { name: "E-Commerce" },
       };
 
-      prismaService.merchant.findUnique.mockResolvedValue(mockMerchant);
+      prismaService.merchant.findFirst.mockResolvedValue(mockMerchant);
 
       const result = await service.validateMerchantForTransaction(
         merchantId,
+        "org-123",
         amount,
       );
 
@@ -171,10 +243,11 @@ describe("MerchantService", () => {
     });
 
     it("should return canProcess false if merchant not found", async () => {
-      prismaService.merchant.findUnique.mockResolvedValue(null);
+      prismaService.merchant.findFirst.mockResolvedValue(null);
 
       const result = await service.validateMerchantForTransaction(
         "nonexistent",
+        "org-123",
         100,
       );
 
@@ -188,10 +261,11 @@ describe("MerchantService", () => {
         config: null,
         category: null,
       };
-      prismaService.merchant.findUnique.mockResolvedValue(mockMerchant);
+      prismaService.merchant.findFirst.mockResolvedValue(mockMerchant);
 
       const result = await service.validateMerchantForTransaction(
         "merchant-123",
+        "org-123",
         100,
       );
 

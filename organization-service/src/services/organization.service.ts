@@ -117,11 +117,11 @@ export class OrganizationService {
       }
 
       if (status) {
-        where.status = status;
-        if (status === 'inactive') {
-          where.status = { in: ['INACTIVE', 'SUSPENDED'] };
-        } else {
-          where.status = status;
+        const sUpper = status.toUpperCase();
+        if (sUpper === 'INACTIVE' || sUpper === 'SUSPENDED') {
+          where.status = 'SUSPENDED';
+        } else if (sUpper === 'ACTIVE' || sUpper === 'DELETED') {
+          where.status = sUpper;
         }
       }
 

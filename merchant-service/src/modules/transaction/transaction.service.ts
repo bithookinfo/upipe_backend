@@ -2196,7 +2196,7 @@ export class TransactionService {
           chunk.map(async (txn) => {
             try {
               const amount = parseFloat(txn.amount || txn.txnAmount || txn.transactionAmount || "0");
-              const txnId = txn.txnId || txn.transactionId || txn.rrn || txn.utr || `hdfc-${Date.now()}-${Math.random()}`;
+              const txnId = txn.txnid || txn.txnId || txn.transactionId || txn.rrn || txn.utr || `hdfc-${Date.now()}-${Math.random()}`;
               const status = this.mapHdfcStatus(txn.status || txn.txnStatus || txn.transactionStatus);
 
               const dateStr = txn.txnDate || txn.transactionDate || txn.endTime || txn.sortTime;
@@ -2225,7 +2225,7 @@ export class TransactionService {
                 providerResponse: txn,
                 customerName: txn.payerName || txn.customerName || null,
                 customerContact: txn.payerVpa || txn.customerVpa || null,
-                utr: txn.rrn || txn.utr || txn.bankReferenceNumber || null,
+                utr: (txn.issuerRefNo && txn.issuerRefNo !== "NA") ? txn.issuerRefNo : (txn.rrn || txn.utr || txn.bankReferenceNumber || null),
                 createdAt: parsedDate,
                 completedAt: parsedDate,
               };

@@ -4,7 +4,10 @@ import {
   NotFoundException,
   BadRequestException,
   InternalServerErrorException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import axios from "axios";
 import { PrismaService } from "../../prisma/prisma.service";
 import { MerchantStatus } from "@prisma/client";
 
@@ -12,7 +15,10 @@ import { MerchantStatus } from "@prisma/client";
 export class MerchantService {
   private readonly logger = new Logger(MerchantService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+  ) {}
 
   private cleanName(name: string) {
     if (!name) return name;
@@ -84,6 +90,7 @@ export class MerchantService {
     pincode?: string;
     status?: string;
     isSuperAdmin?: boolean;
+    orgSubscriptionId?: string;
   }) {
     try {
       this.logger.log(
@@ -92,11 +99,66 @@ export class MerchantService {
 
       // DEPRECATED: Merchant creation no longer consumes subscription slots.
       // Slots are consumed when connecting a provider.
-      // await this.checkSubscriptionSlotAvailable(data.organizationId);
+
+
+      if (!data.orgSubscriptionId && !data.isSuperAdmin) {
+        throw new BadRequestException({
+          code: "PLAN_ASSIGNMENT_REQUIRED",
+          message: "A subscription plan assignment is required to create a merchant."
+        });
+      }
+
+      if (data.orgSubscriptionId) {
+        const subscriptionServiceUrl = this.configService.get<string>("SUBSCRIPTION_SERVICE_URL");
+        const internalToken = this.configService.get<string>("INTERNAL_TOKEN");
+
+        if (!subscriptionServiceUrl || !internalToken) {
+          throw new ServiceUnavailableException({
+            code: "SUBSCRIPTION_VALIDATION_UNAVAILABLE",
+            message: "Unable to validate the selected subscription due to missing configuration."
+          });
+        }
+
+        try {
+          const response = await axios.get(
+            `${subscriptionServiceUrl}/internal/subscriptions/${data.orgSubscriptionId}/assignment-validation`,
+            {
+              headers: {
+                "x-internal-token": internalToken,
+                "x-organization-id": data.organizationId,
+              },
+              timeout: 5000,
+            }
+          );
+
+          if (!response.data?.assignable) {
+            throw new BadRequestException({
+              code: response.data?.reasonCode || "SUBSCRIPTION_NOT_ASSIGNABLE",
+              message: response.data?.message || "The selected subscription cannot be assigned."
+            });
+          }
+        } catch (error) {
+          if (error instanceof BadRequestException) {
+            throw error;
+          }
+          if (axios.isAxiosError(error) && error.response?.status === 404) {
+            throw new NotFoundException({
+              code: "SUBSCRIPTION_NOT_FOUND",
+              message: "The requested subscription was not found or is invalid."
+            });
+          }
+          this.logger.error("Failed to validate subscription", error);
+          throw new ServiceUnavailableException({
+            code: "SUBSCRIPTION_VALIDATION_UNAVAILABLE",
+            message: "Unable to validate the selected subscription."
+          });
+        }
+      }
 
       const merchant = await this.prisma.merchant.create({
         data: {
           organizationId: data.organizationId,
+          orgSubscriptionId: data.orgSubscriptionId ?? null,
           name: data.name,
           businessName: data.businessName,
           categoryId: data.categoryId,
@@ -107,7 +169,7 @@ export class MerchantService {
           state: data.state,
           pincode: data.pincode,
           status: (data.status as MerchantStatus) || MerchantStatus.PENDING,
-          isPlatform: !!data.isSuperAdmin,
+          isPlatform: Boolean(data.isSuperAdmin),
         },
       });
 
@@ -129,81 +191,14 @@ export class MerchantService {
       };
     } catch (error) {
       this.logger.error(`❌ Failed to create merchant:`, error);
-      if (error instanceof BadRequestException) throw error;
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException ||
+        error instanceof ServiceUnavailableException
+      ) {
+        throw error;
+      }
       throw new InternalServerErrorException("Failed to create merchant");
-    }
-  }
-
-  private async checkSubscriptionSlotAvailable(organizationId: string) {
-    try {
-      const axios = require("axios");
-      const subscriptionServiceUrl = process.env.SUBSCRIPTION_SERVICE_URL;
-
-      const response = await axios.get(
-        `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/can-connect`, { headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": organizationId } }
-      );
-
-      if (response.data && !response.data.allowed) {
-        throw new BadRequestException(
-          response.data.message || "No available subscription slots. Please purchase a plan to connect more merchants.",
-        );
-      }
-
-      return true;
-    } catch (error) {
-      if (error instanceof BadRequestException) throw error;
-
-      this.logger.error(
-        `Failed to check subscription slots: ${error.message}`,
-      );
-      if (error.response?.data?.message) {
-        throw new BadRequestException(error.response.data.message);
-      }
-      if (error.response?.status === 400 || error.response?.status === 403) {
-        throw new BadRequestException(
-          error.response?.data?.message ||
-            "Subscription slot validation failed",
-        );
-      }
-    }
-  }
-
-  private async assignSubscriptionSlot(
-    organizationId: string,
-    merchantId: string,
-  ) {
-    try {
-      const axios = require("axios");
-      const subscriptionServiceUrl = process.env.SUBSCRIPTION_SERVICE_URL;
-
-      await axios.post(
-        `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/assign-slot`,
-        { merchantId }, { headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": organizationId } }
-      );
-    } catch (error) {
-      this.logger.warn(
-        `Failed to assign subscription slot: ${error.message}`,
-      );
-    }
-  }
-
-  private async unassignSubscriptionSlot(
-    organizationId: string,
-    merchantId: string,
-  ) {
-    try {
-      const axios = require("axios");
-      const subscriptionServiceUrl = process.env.SUBSCRIPTION_SERVICE_URL;
-
-      await axios.post(
-        `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/unassign-slot`,
-        { merchantId }, { headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": organizationId } }
-      );
-      this.logger.log(`♻️ Freed subscription slot for merchant ${merchantId}`);
-    } catch (error) {
-      this.logger.error(
-        `Failed to update subscription usage: ${error.message}`,
-      );
     }
   }
 
@@ -1693,16 +1688,8 @@ export class MerchantService {
         },
       });
 
-      // Free the subscription slot so it can be reassigned
-      await this.unassignSubscriptionSlot(
-        merchant.organizationId,
-        merchantId,
-      ).catch((err) => {
-        this.logger.warn(`Failed to unassign subscription slot: ${err.message}`);
-      });
-
       this.logger.log(
-        `✅ Merchant soft-deleted: ${merchantId} (providers and config retained for audit, subscription slot freed)`,
+        `✅ Merchant soft-deleted: ${merchantId} (providers and config retained for audit)`,
       );
 
       return {

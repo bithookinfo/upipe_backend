@@ -2334,6 +2334,16 @@ export class GpayService implements OnModuleDestroy {
     name: string,
     isSuperAdmin: boolean = false,
   ) {
+    let orgSubscriptionId: string | undefined;
+    try {
+      const { ProviderConnectionService } = require("../provider/provider-connection.service");
+      const providerService = this.moduleRef.get(ProviderConnectionService, { strict: false });
+      if (providerService) {
+        orgSubscriptionId = await providerService.getValidSubscriptionSlotId(organizationId, ProviderType.GPAY, null, isSuperAdmin);
+      }
+    } catch {
+    }
+
     // When onboarding with temp- merchantId: always create NEW merchant (don't attach to existing PhonePe/etc)
     const isNewOnboarding = merchantId.startsWith("temp-") || !merchantId;
     if (isNewOnboarding) {
@@ -2342,6 +2352,7 @@ export class GpayService implements OnModuleDestroy {
         data: {
           id,
           organizationId,
+          orgSubscriptionId,
           name,
           isActive: true,
           isPlatform: isSuperAdmin,
@@ -2359,7 +2370,13 @@ export class GpayService implements OnModuleDestroy {
       this.logger.log(`♻️ Restoring soft-deleted merchant: ${merchant.id}`);
       merchant = await this.prisma.merchant.update({
         where: { id: merchant.id },
-        data: { deletedAt: null, isActive: true } as any,
+        data: { deletedAt: null, isActive: true, ...(orgSubscriptionId && { orgSubscriptionId }) } as any,
+      });
+    }
+    if (merchant && !merchant.orgSubscriptionId && orgSubscriptionId) {
+      merchant = await this.prisma.merchant.update({
+        where: { id: merchant.id },
+        data: { orgSubscriptionId },
       });
     }
     if (!merchant) {
@@ -2367,6 +2384,7 @@ export class GpayService implements OnModuleDestroy {
         data: {
           id: merchantId,
           organizationId,
+          orgSubscriptionId,
           name,
           isActive: true,
           isPlatform: isSuperAdmin,

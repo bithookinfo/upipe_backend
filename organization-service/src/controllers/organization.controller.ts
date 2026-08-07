@@ -73,11 +73,13 @@ export class OrganizationController {
     @Query("page") page?: number,
     @Query("limit") limit?: number,
     @Query("search") search?: string,
+    @Query("status") status?: string,
   ) {
     const result = await this.organizationService.findAll({
       page: page ? parseInt(page.toString()) : 1,
       limit: limit ? parseInt(limit.toString()) : 10,
       search,
+      status,
     });
 
     return {

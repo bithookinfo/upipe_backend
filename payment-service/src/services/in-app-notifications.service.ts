@@ -24,12 +24,35 @@ export class InAppNotificationsService {
     message: string;
   }): Promise<void> {
     try {
+      const type = params.type ?? 'order_completed';
+      
+      if (params.organizationId && (params.orderId || params.externalOrderId)) {
+        const whereClause: any = {
+          organizationId: params.organizationId,
+          type,
+        };
+        if (params.orderId) {
+          whereClause.orderId = params.orderId;
+        } else if (params.externalOrderId) {
+          whereClause.externalOrderId = params.externalOrderId;
+        }
+
+        const existing = await this.prisma.inAppNotification.findFirst({
+          where: whereClause,
+        });
+
+        if (existing) {
+          this.logger.debug(`Notification for order ${params.orderId || params.externalOrderId} already exists, skipping duplicate creation.`);
+          return;
+        }
+      }
+
       await this.prisma.inAppNotification.create({
         data: {
           organizationId: params.organizationId,
           orderId: params.orderId ?? null,
           externalOrderId: params.externalOrderId ?? null,
-          type: params.type ?? 'order_completed',
+          type,
           title: params.title,
           message: params.message,
         },
@@ -66,13 +89,32 @@ export class InAppNotificationsService {
         createdAt: { gte: since },
       },
       orderBy: { createdAt: 'desc' },
-      take: limit,
+      take: limit * 2, // Fetch extra so deduplication doesn't shrink list below limit
       include: {
         reads: userId ? { where: { userId }, take: 1 } : false,
       },
     });
 
-    return notifications.map((n) => ({
+    // Deduplicate existing DB records by orderId / externalOrderId + type
+    const seen = new Set<string>();
+    const deduplicated: typeof notifications = [];
+
+    for (const n of notifications) {
+      const key = n.orderId 
+        ? `${n.orderId}_${n.type}` 
+        : n.externalOrderId 
+          ? `${n.externalOrderId}_${n.type}` 
+          : null;
+
+      if (key) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
+      deduplicated.push(n);
+      if (deduplicated.length >= limit) break;
+    }
+
+    return deduplicated.map((n) => ({
       id: n.id,
       type: n.type,
       title: n.title,

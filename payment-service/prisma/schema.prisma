@@ -8,42 +8,45 @@ datasource db {
 }
 
 model Order {
-  id              String        @id @default(uuid()) @db.VarChar(36)
-  externalOrderId String        @unique @map("external_order_id") @db.VarChar(100)
-  clientReferenceId String?     @map("client_reference_id") @db.VarChar(30)
+  id                   String        @id @default(uuid()) @db.VarChar(36)
+  externalOrderId      String        @unique @map("external_order_id") @db.VarChar(100)
+  clientReferenceId    String?       @map("client_reference_id") @db.VarChar(30)
   /// UTR (or bank ref) from payment; used to match full transaction response to our order after merchant/order lookup by id fails
-  utr             String?       @db.VarChar(50)
-  organizationId  String        @map("organization_id") @db.VarChar(36)
-  merchantId      String        @map("merchant_id") @db.VarChar(36)
-  providerId      String?       @map("provider_id") @db.VarChar(36)
-  createdById     String?       @map("created_by_id") @db.VarChar(36)
-  amount          Decimal       @db.Decimal(15, 2)
-  currency        String        @default("INR") @db.VarChar(3)
-  status          OrderStatus   @default(PENDING)
-  paymentMethod   PaymentMethod @default(UPI) @map("payment_method")
-  customerName    String?       @map("customer_name") @db.VarChar(255)
-  customerMobile  String?       @map("customer_mobile") @db.VarChar(15)
-  customerEmail   String?       @map("customer_email") @db.VarChar(255)
-  description     String?       @db.Text
-  remark          String?       @db.Text
-  callbackUrl     String?       @map("callback_url") @db.VarChar(500)
-  redirectUrl     String?       @map("redirect_url") @db.VarChar(500)
-  webhookSent     Boolean       @default(false) @map("webhook_sent")
-  webhookFailed   Boolean       @default(false) @map("webhook_failed")
-  webhookFailureReason String?  @map("webhook_failure_reason") @db.Text
-  metadata        Json?
-  expiresAt       DateTime?     @map("expires_at")
-  completedAt     DateTime?     @map("completed_at")
-  createdAt       DateTime      @default(now()) @map("created_at")
-  updatedAt       DateTime      @updatedAt @map("updated_at")
-  callbackLogs    CallbackLog[]
-  paymentLink     PaymentLink?
-  transactions    Transaction[]
+  utr                  String?       @db.VarChar(50)
+  organizationId       String        @map("organization_id") @db.VarChar(36)
+  orgSubscriptionId    String?       @map("org_subscription_id") @db.VarChar(36)
+  merchantId           String        @map("merchant_id") @db.VarChar(36)
+  providerId           String?       @map("provider_id") @db.VarChar(36)
+  createdById          String?       @map("created_by_id") @db.VarChar(36)
+  amount               Decimal       @db.Decimal(15, 2)
+  currency             String        @default("INR") @db.VarChar(3)
+  status               OrderStatus   @default(PENDING)
+  paymentMethod        PaymentMethod @default(UPI) @map("payment_method")
+  customerName         String?       @map("customer_name") @db.VarChar(255)
+  customerMobile       String?       @map("customer_mobile") @db.VarChar(15)
+  customerEmail        String?       @map("customer_email") @db.VarChar(255)
+  description          String?       @db.Text
+  remark               String?       @db.Text
+  callbackUrl          String?       @map("callback_url") @db.VarChar(500)
+  redirectUrl          String?       @map("redirect_url") @db.VarChar(500)
+  webhookSent          Boolean       @default(false) @map("webhook_sent")
+  webhookFailed        Boolean       @default(false) @map("webhook_failed")
+  webhookFailureReason String?       @map("webhook_failure_reason") @db.Text
+  metadata             Json?
+  expiresAt            DateTime?     @map("expires_at")
+  completedAt          DateTime?     @map("completed_at")
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @updatedAt @map("updated_at")
+  callbackLogs         CallbackLog[]
+  paymentLink          PaymentLink?
+  transactions         Transaction[]
 
   @@index([externalOrderId])
   @@index([clientReferenceId])
   @@index([utr])
   @@index([organizationId])
+  @@index([orgSubscriptionId])
+  @@index([organizationId, orgSubscriptionId, createdAt])
   @@index([merchantId])
   @@index([status])
   @@index([status, webhookSent]) // Composite index for webhook cron
@@ -144,14 +147,14 @@ model CallbackLog {
 }
 
 model InAppNotification {
-  id              String   @id @default(uuid()) @db.VarChar(36)
-  organizationId  String   @map("organization_id") @db.VarChar(36)
-  orderId         String?  @map("order_id") @db.VarChar(36)
-  externalOrderId String?  @map("external_order_id") @db.VarChar(100)
-  type            String   @default("order_completed") @db.VarChar(50)
-  title           String   @db.VarChar(255)
-  message         String   @db.VarChar(500)
-  createdAt       DateTime @default(now()) @map("created_at")
+  id              String             @id @default(uuid()) @db.VarChar(36)
+  organizationId  String             @map("organization_id") @db.VarChar(36)
+  orderId         String?            @map("order_id") @db.VarChar(36)
+  externalOrderId String?            @map("external_order_id") @db.VarChar(100)
+  type            String             @default("order_completed") @db.VarChar(50)
+  title           String             @db.VarChar(255)
+  message         String             @db.VarChar(500)
+  createdAt       DateTime           @default(now()) @map("created_at")
   reads           NotificationRead[]
 
   @@index([organizationId])
@@ -161,10 +164,10 @@ model InAppNotification {
 }
 
 model NotificationRead {
-  id             String   @id @default(uuid()) @db.VarChar(36)
-  notificationId String   @map("notification_id") @db.VarChar(36)
-  userId         String   @map("user_id") @db.VarChar(36)
-  readAt         DateTime @default(now()) @map("read_at")
+  id             String            @id @default(uuid()) @db.VarChar(36)
+  notificationId String            @map("notification_id") @db.VarChar(36)
+  userId         String            @map("user_id") @db.VarChar(36)
+  readAt         DateTime          @default(now()) @map("read_at")
   notification   InAppNotification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
 
   @@unique([notificationId, userId])

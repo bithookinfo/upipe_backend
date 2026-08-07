@@ -237,8 +237,11 @@ export class ProviderConnectionService {
       }
     };
     
-    if (merchantIdToExclude && !merchantIdToExclude.startsWith("temp")) {
-      whereClause.merchant.id = { not: merchantIdToExclude };
+    if (merchantIdToExclude) {
+      whereClause.merchant = {
+        ...whereClause.merchant,
+        id: { not: merchantIdToExclude },
+      };
     }
 
     const existingConnection = await this.prisma.merchantProvider.findFirst({
@@ -636,9 +639,12 @@ export class ProviderConnectionService {
       const existingMerchantPre = await this.prisma.merchant.findFirst({
         where: { id: merchantIdToUse },
       });
-      if (!existingMerchantPre) {
-        await this.checkSubscriptionLimit(data.organizationId, "CREATE_MERCHANT", data.isSuperAdmin);
-      }
+      const autoAssignedSlotId = await this.getValidSubscriptionSlotId(
+        data.organizationId,
+        ProviderType.PHONEPE,
+        existingMerchantPre?.orgSubscriptionId,
+        data.isSuperAdmin,
+      );
 
       const duplicateExcludeProviderId =
         reconnectProvider?.id ?? existingPhonePeRow?.id;
@@ -666,6 +672,9 @@ export class ProviderConnectionService {
           const newNameIsReal = !this.isGenericMerchantName(groupName);
 
           const dataToUpdate: any = { isPlatform: !!data.isSuperAdmin };
+          if (autoAssignedSlotId) {
+            dataToUpdate.orgSubscriptionId = autoAssignedSlotId;
+          }
 
           if (newNameIsReal && (currentIsGeneric || !merchant.name)) {
             this.logger.log(`📝 Updating existing merchant name to: ${groupName}`);
@@ -687,6 +696,7 @@ export class ProviderConnectionService {
             data: {
               id: merchantIdToUse,
               organizationId: data.organizationId,
+              orgSubscriptionId: autoAssignedSlotId,
               name: groupName || "PhonePe Merchant",
               businessName: groupName || "PhonePe Merchant",
               phone: data.phoneNumber,
@@ -1122,9 +1132,12 @@ export class ProviderConnectionService {
       const existingMerchantPre = await this.prisma.merchant.findFirst({
         where: { id: merchantIdToUse },
       });
-      if (!existingMerchantPre) {
-        await this.checkSubscriptionLimit(data.organizationId, "CREATE_MERCHANT", data.isSuperAdmin);
-      }
+      const autoAssignedSlotId = await this.getValidSubscriptionSlotId(
+        data.organizationId,
+        ProviderType.GPAY,
+        existingMerchantPre?.orgSubscriptionId,
+        data.isSuperAdmin,
+      );
 
       const txResult = await this.prisma.$transaction(async (tx) => {
         await this.checkDuplicateAccount(
@@ -1148,6 +1161,9 @@ export class ProviderConnectionService {
           const newNameIsReal = !this.isGenericMerchantName(selectedGroupName);
 
           const dataToUpdate: any = { isPlatform: !!data.isSuperAdmin };
+          if (autoAssignedSlotId) {
+            dataToUpdate.orgSubscriptionId = autoAssignedSlotId;
+          }
 
           if (newNameIsReal && (currentIsGeneric || !merchant.name)) {
             this.logger.log(`📝 Updating existing merchant name to: ${selectedGroupName}`);
@@ -1171,6 +1187,7 @@ export class ProviderConnectionService {
             data: {
               id: merchantIdToUse,
               organizationId: data.organizationId,
+              orgSubscriptionId: autoAssignedSlotId,
               name: selectedGroupName || "PhonePe Merchant",
               businessName: selectedGroupName || "PhonePe Merchant",
               phone: data.phoneNumber,
@@ -1493,9 +1510,12 @@ export class ProviderConnectionService {
       const existingMerchantPre = await this.prisma.merchant.findFirst({
         where: { id: merchantIdToUse },
       });
-      if (!existingMerchantPre) {
-        await this.checkSubscriptionLimit(data.organizationId, "CREATE_MERCHANT", data.isSuperAdmin);
-      }
+      const autoAssignedSlotId = await this.getValidSubscriptionSlotId(
+        data.organizationId,
+        ProviderType.PAYTM,
+        existingMerchantPre?.orgSubscriptionId,
+        data.isSuperAdmin,
+      );
 
       let merchantCreated = false;
       const txResult = await this.prisma.$transaction(async (tx) => {
@@ -1705,44 +1725,85 @@ export class ProviderConnectionService {
     }
   }
 
-  private async checkSubscriptionLimit(organizationId: string, action: string, isSuperAdmin?: boolean) {
-    if (isSuperAdmin) {
-      this.logger.log(`🛡️ Super Admin bypass for ${action} in organization ${organizationId}`);
-      return;
+  public async getValidSubscriptionSlotId(
+    organizationId: string,
+    providerCode: string,
+    existingSlotId?: string | null,
+    isSuperAdmin?: boolean,
+  ): Promise<string | undefined> {
+    if (isSuperAdmin) return undefined;
+
+    if (existingSlotId) {
+      try {
+        const axios = require("axios");
+        const subscriptionServiceUrl = process.env.SUBSCRIPTION_SERVICE_URL;
+        const response = await axios.get(
+          `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/assignable`,
+          { headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": organizationId } }
+        );
+
+        if (response.data?.success && Array.isArray(response.data.subscriptions)) {
+          const slotValid = response.data.subscriptions.some((s: any) => s.id === existingSlotId);
+          if (slotValid) {
+            return existingSlotId;
+          }
+        }
+      } catch (err) {
+        // Fallthrough if check fails
+      }
     }
+
+    return this.autoAssignSubscriptionSlot(organizationId, providerCode, isSuperAdmin);
+  }
+
+  public async autoAssignSubscriptionSlot(organizationId: string, providerCode: string, isSuperAdmin?: boolean): Promise<string | undefined> {
+    if (isSuperAdmin) {
+      this.logger.log(`🛡️ Super Admin bypass for slot assignment in organization ${organizationId}`);
+      return undefined;
+    }
+
     try {
       const axios = require("axios");
       const subscriptionServiceUrl = process.env.SUBSCRIPTION_SERVICE_URL;
 
-      const response = await axios.post(
-        `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/check-limits`,
-        {
-          action,
-          isSuperAdmin,
-        },
+      const response = await axios.get(
+        `${subscriptionServiceUrl}/real-subscriptions/organizations/${organizationId}/assignable`,
         { headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": organizationId } }
       );
 
-      if (response.data && !response.data.allowed) {
-        throw new BadRequestException(
-          response.data.reason || `Subscription limit reached for ${action}`,
-        );
+      if (!response.data || !response.data.success || !response.data.subscriptions) {
+        throw new BadRequestException("Invalid response from subscription service");
       }
-    } catch (error) {
-      if (error instanceof BadRequestException) throw error;
-      this.logger.error(
-        `Failed to check subscription limits: ${error.message}`,
-      );
-      if (error.response?.status === 400 || error.response?.status === 403) {
-        throw new BadRequestException(
-          error.response?.data?.message ||
-          "Subscription limit validation failed",
-        );
+
+      const subscriptions = response.data.subscriptions.filter((s: any) => s.assignable);
+
+      for (const sub of subscriptions) {
+        const providerAccess = sub.plan.providerAccess?.find((p: any) => p.providerCode.toUpperCase() === providerCode.toUpperCase());
+        if (providerAccess && providerAccess.isIncluded && providerAccess.slotsCount > 0) {
+          const usedCount = await this.prisma.merchantProvider.count({
+            where: {
+              providerType: providerCode.toUpperCase() as any,
+              merchant: {
+                orgSubscriptionId: sub.id,
+                deletedAt: null,
+              }
+            }
+          });
+          if (usedCount < providerAccess.slotsCount) {
+            this.logger.log(`✅ Auto-assigned slot ${sub.id} (Plan: ${sub.plan.name}) for ${providerCode}`);
+            return sub.id;
+          }
+        }
       }
+
+      throw new BadRequestException(`No available subscription slots found for provider ${providerCode}. Please purchase a new plan.`);
+    } catch (error: any) {
+      this.logger.error(`Failed to auto-assign subscription slot: ${error.message}`);
+      throw new BadRequestException(error.response?.data?.message || error.message || "Failed to validate and assign subscription slot");
     }
   }
 
-  private async checkProviderLimit(
+  public async checkProviderLimit(
     organizationId: string,
     providerCode: string,
     isSuperAdmin?: boolean,
@@ -1773,21 +1834,31 @@ export class ProviderConnectionService {
         { headers: { "x-internal-token": process.env.INTERNAL_TOKEN, "x-organization-id": organizationId } }
       );
 
-      const data = response.data?.data?.[providerCode.toUpperCase()];
-      if (!data || data.allowed === 0) {
+      const entitlements = response.data?.entitlements || [];
+      const data = entitlements.find((e: any) => e.providerCode === providerCode.toUpperCase());
+
+      if (!data || data.totalSlots === 0) {
         throw new BadRequestException(`Provider ${providerCode} is not available in your current subscription plan`);
       }
-      if (data.remaining <= 0) {
+      if (data.remainingSlots <= 0) {
         throw new BadRequestException(`No available slots for provider ${providerCode}. Please upgrade your plan.`);
       }
     } catch (error: any) {
       if (error instanceof BadRequestException) throw error;
-      this.logger.error(`Failed to check provider limits: ${error.message}`);
+      
+      console.log("=== FULL ERROR OBJECT IN CHECK PROVIDER LIMITS ===");
+      console.dir(error, { depth: null });
+      console.log("Error response data:", error?.response?.data);
+      console.log("Error name:", error?.name);
+      console.log("Error message:", error?.message);
+      
+      this.logger.error(`Failed to check provider limits: ${error.message || error}`);
       if (error.response?.status === 400 || error.response?.status === 403) {
         throw new BadRequestException(
           error.response?.data?.message || "Provider limit validation failed",
         );
       }
+      throw new BadRequestException(`Failed to validate provider limits: ${error.message || error}`);
     }
   }
 
@@ -2243,9 +2314,12 @@ export class ProviderConnectionService {
       const existingMerchantPre = await this.prisma.merchant.findFirst({
         where: { id: merchantIdToUse },
       });
-      if (!existingMerchantPre) {
-        await this.checkSubscriptionLimit(data.organizationId, "CREATE_MERCHANT", data.isSuperAdmin);
-      }
+      const autoAssignedSlotId = await this.getValidSubscriptionSlotId(
+        data.organizationId,
+        ProviderType.BHARATPE,
+        existingMerchantPre?.orgSubscriptionId,
+        data.isSuperAdmin,
+      );
 
       // Build session cookie for transactions API (required by BharatPe like in PHP flow)
       const cookie =
@@ -2273,6 +2347,9 @@ export class ProviderConnectionService {
           const newNameIsReal = merchantInfo.name && !this.isGenericMerchantName(merchantInfo.name);
 
           const dataToUpdate: any = { isPlatform: !!data.isSuperAdmin };
+          if (autoAssignedSlotId) {
+            dataToUpdate.orgSubscriptionId = autoAssignedSlotId;
+          }
 
           if (newNameIsReal && (currentIsGeneric || !merchant.name)) {
             this.logger.log(`📝 Syncing BharatPe merchant name: ${merchantInfo.name}`);
@@ -2293,6 +2370,7 @@ export class ProviderConnectionService {
               name: merchantInfo.name || data.phoneNumber,
               businessName: merchantInfo.name || data.phoneNumber,
               organizationId: data.organizationId,
+              orgSubscriptionId: autoAssignedSlotId,
               status: "PENDING",
               isActive: false,
               isPlatform: !!data.isSuperAdmin,
@@ -2456,10 +2534,12 @@ export class ProviderConnectionService {
       const existingMerchantPre = await this.prisma.merchant.findFirst({
         where: { id: merchantIdToUse },
       });
-      
-      if (!existingMerchantPre) {
-        await this.checkSubscriptionLimit(data.organizationId, "CREATE_MERCHANT", data.isSuperAdmin);
-      }
+      const autoAssignedSlotId = await this.getValidSubscriptionSlotId(
+        data.organizationId,
+        ProviderType.HDFC,
+        existingMerchantPre?.orgSubscriptionId,
+        data.isSuperAdmin,
+      );
 
       const user = verifyResult.user || {};
       const docDetails = user.document_details || {};

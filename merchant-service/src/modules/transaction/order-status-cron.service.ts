@@ -2033,6 +2033,7 @@ export class OrderStatusCronService {
 
       const success = await this.syncTransactionAndCompleteOrder(order, {
         externalTransactionId:
+          txn.txnid ||
           txn.txnId ||
           txn.transactionId ||
           txn.rrn ||
@@ -2046,7 +2047,7 @@ export class OrderStatusCronService {
         providerResponse: txn,
         customerName: txn.payerName || txn.customerName || null,
         customerContact: txn.payerVpa || txn.customerVpa || null,
-        utr: txn.rrn || txn.utr || txn.bankReferenceNumber || null,
+        utr: (txn.issuerRefNo && txn.issuerRefNo !== "NA") ? txn.issuerRefNo : (txn.rrn || txn.utr || txn.bankReferenceNumber || null),
         paymentApp: txn.paymentApp,
         providerId: provider.id,
         merchantId: order.merchantId,
@@ -2150,13 +2151,13 @@ export class OrderStatusCronService {
               const storedAmount = Number(cfg.currentDailyAmount ?? 0);
               // Only update if the payment-service amount is larger than stored
               // (never shrink — the cron may be mid-run; shrinking could hide in-flight orders)
-              if (actualAmount > storedAmount + 0.01) {
+              if (Math.abs(actualAmount - storedAmount) > 0.01) {
                 await this.prisma.merchantConfig.update({
                   where: { merchantId: cfg.merchantId },
                   data: { currentDailyAmount: actualAmount },
                 });
                 this.logger.log(
-                  `[DailyUsageReconcile] ✅ ${cfg.merchantId}: ${storedAmount} → ${actualAmount} (+${(actualAmount - storedAmount).toFixed(2)})`,
+                  `[DailyUsageReconcile] ✅ ${cfg.merchantId}: ${storedAmount} → ${actualAmount}`,
                 );
               }
             } catch (err) {

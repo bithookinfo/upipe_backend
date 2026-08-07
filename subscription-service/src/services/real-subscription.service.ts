@@ -62,6 +62,85 @@ export class RealSubscriptionService {
     }
   }
 
+  async getAssignableSubscriptions(organizationId: string) {
+    try {
+      const slots = await this.prisma.orgSubscription.findMany({
+        where: { organizationId },
+        include: {
+          plan: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+              maxTransactions: true,
+              providerAccess: {
+                select: {
+                  providerCode: true,
+                  slotsCount: true,
+                  isIncluded: true,
+                },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      const now = new Date();
+
+      const subscriptions = slots.map((slot) => {
+        let assignable = true;
+        let reasonCode: string | null = null;
+
+        if (slot.status === "EXPIRED") {
+          assignable = false;
+          reasonCode = "SUBSCRIPTION_EXPIRED";
+        } else if (slot.status === "CANCELLED") {
+          assignable = false;
+          reasonCode = "SUBSCRIPTION_CANCELLED";
+        } else if (slot.status === "DELETION_PENDING") {
+          assignable = false;
+          reasonCode = "SUBSCRIPTION_DELETION_PENDING";
+        } else if (slot.status !== "UNASSIGNED" && slot.status !== "ACTIVE") {
+          assignable = false;
+          reasonCode = "SUBSCRIPTION_STATUS_NOT_ASSIGNABLE";
+        } else if (slot.startDate > now) {
+          assignable = false;
+          reasonCode = "SUBSCRIPTION_NOT_STARTED";
+        } else if (slot.endDate && slot.endDate <= now) {
+          assignable = false;
+          reasonCode = "SUBSCRIPTION_EXPIRED";
+        }
+
+        return {
+          id: slot.id,
+          organizationId: slot.organizationId,
+          status: slot.status,
+          startDate: slot.startDate,
+          endDate: slot.endDate,
+          purchaseUnitIndex: slot.purchaseUnitIndex,
+          assignable,
+          reasonCode,
+          plan: {
+            id: slot.plan.id,
+            name: slot.plan.name,
+            code: slot.plan.code,
+            maxTransactions: slot.plan.maxTransactions,
+            providerAccess: slot.plan.providerAccess,
+          },
+        };
+      });
+
+      return {
+        success: true,
+        subscriptions,
+      };
+    } catch (error) {
+      this.logger.error("Failed to get assignable subscriptions:", error);
+      throw new BadRequestException("Failed to retrieve assignable subscriptions");
+    }
+  }
+
   async getOrganizationSubscription(organizationId: string, isSuperAdmin: boolean = false) {
     try {
       if (isSuperAdmin) {
@@ -158,6 +237,23 @@ export class RealSubscriptionService {
         }
       }
 
+      let actualMerchantsCount = 0;
+      let allMerchants: any[] = [];
+      try {
+        const axios = require("axios");
+        const merchantServiceUrl = process.env.MERCHANT_SERVICE_URL;
+        const mRes = await axios.get(`${merchantServiceUrl}/merchant/organization/${organizationId}`, {
+          headers: { "x-internal-token": process.env.INTERNAL_TOKEN },
+          timeout: 3000
+        });
+        if (mRes.data?.success && Array.isArray(mRes.data.merchants)) {
+          allMerchants = mRes.data.merchants;
+          actualMerchantsCount = allMerchants.length;
+        }
+      } catch (e) {
+        // Fallback: default to 0 if merchant-service call fails
+      }
+
       const slotUsageMap: Record<string, number> = {};
       slots.forEach((s) => { slotUsageMap[s.id] = 0; });
 
@@ -202,6 +298,50 @@ export class RealSubscriptionService {
         return s.endDate > latest ? s.endDate : latest;
       }, currentSlot.endDate);
 
+      // Auto-reconcile orphaned merchants (merchants whose orgSubscriptionId is missing or belongs to an old deleted slot)
+      const validSlotIds = new Set(slots.map(s => s.id));
+      const orphanedMerchants = allMerchants.filter(m => !m.deletedAt && (!m.orgSubscriptionId || !validSlotIds.has(m.orgSubscriptionId)));
+
+      if (orphanedMerchants.length > 0 && slots.length > 0) {
+        const axios = require("axios");
+        const merchantServiceUrl = process.env.MERCHANT_SERVICE_URL;
+
+        for (const m of orphanedMerchants) {
+          const mProviders = m.providers && Array.isArray(m.providers) && m.providers.length > 0
+            ? m.providers
+            : (m.providerType ? [{ providerType: m.providerType }] : []);
+
+          for (const p of mProviders) {
+            const code = (p.providerType || '').toUpperCase();
+            if (!code) continue;
+
+            for (const s of slots) {
+              const pa = s.plan.providerAccess?.find((access: any) => access.providerCode.toUpperCase() === code);
+              if (pa && pa.isIncluded && pa.slotsCount > 0) {
+                const assignedCount = allMerchants.filter(other => {
+                  if (other.orgSubscriptionId !== s.id || other.deletedAt) return false;
+                  const otherProviders = other.providers && Array.isArray(other.providers) && other.providers.length > 0
+                    ? other.providers
+                    : (other.providerType ? [{ providerType: other.providerType }] : []);
+                  return otherProviders.some((op: any) => (op.providerType || '').toUpperCase() === code);
+                }).length;
+                if (assignedCount < pa.slotsCount) {
+                  m.orgSubscriptionId = s.id; // Assign in memory immediately!
+                  try {
+                    axios.patch(
+                      `${merchantServiceUrl}/internal/merchants/${m.id}/subscription-assignment`,
+                      { orgSubscriptionId: s.id },
+                      { headers: { "x-internal-token": process.env.INTERNAL_TOKEN } }
+                    ).catch(() => {});
+                  } catch (err) {}
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+
       return {
         success: true,
         // Backward compat: expose a single "subscription" object for existing consumers
@@ -216,26 +356,48 @@ export class RealSubscriptionService {
           limits: aggregatedLimits,
           currentUsage: {
             usersCreated: 0,
-            merchantsCreated: activeSlots.length,
+            merchantsCreated: actualMerchantsCount,
             transactionsCount: 0,
             transactionVolume: 0,
             apiCallsCount: 0,
           },
           providerAccess: Object.values(providerAccessMap),
         },
-        slots: slots.map((s) => ({
-          id: s.id,
-          merchantId: s.merchantId,
-          planId: s.planId,
-          planName: s.plan.name,
-          status: s.status,
-          startDate: s.startDate,
-          endDate: s.endDate,
-          purchaseId: s.purchaseId,
-          createdAt: s.createdAt,
-          providerAccess: s.plan.providerAccess,
-          usedTxn: slotUsageMap[s.id] || 0,
-        })),
+        slots: slots.map((s) => {
+          const connectedMerchants = allMerchants.filter(m => m.orgSubscriptionId === s.id && !m.deletedAt);
+
+          // Re-calculate provider usage mapping to show used slots per provider
+          const providerUsage: Record<string, number> = {};
+          connectedMerchants.forEach(m => {
+            if (m.providers && Array.isArray(m.providers)) {
+              m.providers.forEach((p: any) => {
+                const code = (p.providerType || '').toUpperCase();
+                if (code) {
+                  providerUsage[code] = (providerUsage[code] || 0) + 1;
+                }
+              });
+            } else if (m.providerType) { // Fallback just in case
+              const code = String(m.providerType).toUpperCase();
+              providerUsage[code] = (providerUsage[code] || 0) + 1;
+            }
+          });
+
+          return {
+            id: s.id,
+            merchantId: s.merchantId, // deprecated
+            planId: s.planId,
+            planName: s.plan.name,
+            status: s.status,
+            startDate: s.startDate,
+            endDate: s.endDate,
+            purchaseId: s.purchaseId,
+            createdAt: s.createdAt,
+            providerAccess: s.plan.providerAccess,
+            usedTxn: slotUsageMap[s.id] || 0,
+            connectedMerchants,
+            providerUsage
+          };
+        }),
         summary: {
           totalSlots: slots.length,
           activeSlots: activeSlots.length,
@@ -684,140 +846,84 @@ export class RealSubscriptionService {
 
     this.logger.log(`✅ [Callback] Created ${purchase.quantity} slots for org ${purchase.organizationId} (purchase ${purchase.id})`);
 
-    this.autoAssignFloatingMerchants(purchase.organizationId).catch(err => {
-      this.logger.warn(`Failed to auto-assign merchants for org ${purchase.organizationId}: ${err.message}`);
-    });
-
     return { success: true, message: `Created ${purchase.quantity} subscription slots` };
   }
 
-  async autoAssignFloatingMerchants(organizationId: string) {
+
+  async deleteSlot(slotId: string, organizationId: string, forceDeleteMerchant = false) {
     try {
-      this.logger.log(`🔄 Auto-assigning floating merchants for org ${organizationId}`);
-
-      const axios = require("axios");
-      const merchantServiceUrl = process.env.MERCHANT_SERVICE_URL;
-      const response = await axios.get(`${merchantServiceUrl}/merchant/list`, {
-        headers: { 'x-organization-id': organizationId, 'x-internal-token': process.env.INTERNAL_TOKEN }
+      // 1. Fetch the slot to verify it exists and belongs to this org
+      const slot = await this.prisma.orgSubscription.findUnique({
+        where: { id: slotId },
       });
 
-      if (!response.data?.success) return;
-      const allMerchants = response.data.merchants || [];
-
-      // 2. Find currently assigned merchants and identify their plan types
-      const activeSlots = await this.prisma.orgSubscription.findMany({
-        where: { organizationId, merchantId: { not: null }, status: "ACTIVE" },
-        include: { plan: true },
-      });
-
-      const assignedMerchantIds = new Set(activeSlots.map(s => s.merchantId));
-
-      // Identify merchants who have a paid slot
-      const paidMerchantIds = new Set(
-        activeSlots.filter(s => !s.plan.isTrial).map(s => s.merchantId)
-      );
-
-      // 3. Find merchants eligible for auto-assignment:
-      //    a) Floating merchants (no slot at all)
-      //    b) Trial merchants who DON'T have a paid slot yet
-      const eligibleMerchants = allMerchants.filter(m => {
-        const hasAnySlot = assignedMerchantIds.has(m.id);
-        const hasPaidSlot = paidMerchantIds.has(m.id);
-
-        // Eligible if they have NO slot OR if they ONLY have a trial slot (and no paid slot yet)
-        return !hasAnySlot || (hasAnySlot && !hasPaidSlot);
-      });
-
-      if (eligibleMerchants.length === 0) {
-        this.logger.log(`✅ No eligible merchants for auto-assignment in org ${organizationId}`);
-        return;
+      if (!slot) {
+        throw new BadRequestException("Slot not found");
       }
 
-      this.logger.log(`Found ${eligibleMerchants.length} merchants eligible for auto-assignment for org ${organizationId}`);
+      // 2. Check merchant-service for active merchants on this org
+      //    (slot.merchantId is not used — merchants are linked to orgs, not slots directly)
+      const merchantServiceUrl = process.env.MERCHANT_SERVICE_URL;
+      let activeMerchants: Array<{ id: string; name: string }> = [];
+      try {
+        const mRes = await axios.get(`${merchantServiceUrl}/merchant/organization/${organizationId}`, {
+          headers: {
+            "x-internal-token": process.env.INTERNAL_TOKEN,
+            "x-organization-id": organizationId,
+          },
+          timeout: 4000,
+        });
+        const rawList = mRes.data?.merchants || mRes.data?.data || [];
+        // Only active, non-deleted merchants connected to this specific slot
+        activeMerchants = rawList
+          .filter((m: any) => m.isActive && !m.deletedAt && m.orgSubscriptionId === slotId)
+          .map((m: any) => ({ id: m.id, name: m.name || m.businessName || m.id }));
+      } catch (e) {
+        this.logger.warn(`Could not fetch merchants for org ${organizationId}: ${e.message}`);
+      }
 
-      // 4. Try to assign each eligible merchant to a NEW slot
-      for (const merchant of eligibleMerchants) {
-        try {
-          // Double check they didn't get a paid slot in this same loop (though unlikely here)
-          await this.assignSlotToMerchant(organizationId, merchant.id);
-          this.logger.log(`✅ Auto-linked merchant ${merchant.id} to a new slot`);
-        } catch (assignError) {
-          this.logger.debug(`Could not auto-assign merchant ${merchant.id}: ${assignError.message}`);
-          break; // No more slots available
+      if (activeMerchants.length > 0) {
+        if (!forceDeleteMerchant) {
+          const primary = activeMerchants[0];
+          throw new BadRequestException({
+            code: "MERCHANT_CONNECTED",
+            message: `This slot is being used by ${activeMerchants.length} merchant(s). Deleting it will remove their access.`,
+            merchantId: primary.id,
+            merchantName: primary.name,
+            allMerchants: activeMerchants,
+          });
+        }
+
+        // Force delete: soft-delete all active merchants first
+        for (const merchant of activeMerchants) {
+          this.logger.log(`🗑️ Force-deleting merchant ${merchant.id} (${merchant.name}) as part of slot ${slotId} deletion`);
+          try {
+            await axios.delete(`${merchantServiceUrl}/merchant/${merchant.id}`, {
+              headers: {
+                "x-internal-token": process.env.INTERNAL_TOKEN,
+                "x-organization-id": organizationId,
+                "x-user-type": "SUPER_ADMIN",
+              },
+              timeout: 5000,
+            });
+            this.logger.log(`✅ Merchant ${merchant.id} soft-deleted`);
+          } catch (merchantErr) {
+            this.logger.error(`❌ Failed to soft-delete merchant ${merchant.id}:`, merchantErr?.response?.data || merchantErr.message);
+            throw new BadRequestException(
+              `Failed to delete merchant "${merchant.name}". Please remove it manually and try again.`
+            );
+          }
         }
       }
-    } catch (error) {
-      this.logger.error(`Failed during auto-assignment: ${error.message}`);
-    }
-  }
 
-  async checkCanConnectMerchant(organizationId: string) {
-    // Under new rules, merchant creation consumes no subscription capacity.
-    // Limits are enforced at the provider gateway connection level.
-    return {
-      success: true,
-      allowed: true,
-      unassignedCount: 999,
-      message: "Unlimited merchant slots available",
-    };
-  }
-
-  async assignSlotToMerchant(organizationId: string, merchantId: string, slotId?: string) {
-    let slot;
-    if (slotId) {
-      slot = await this.prisma.orgSubscription.findFirst({
-        where: { id: slotId, organizationId, status: "UNASSIGNED", merchantId: null },
-      });
-      if (!slot) {
-        throw new BadRequestException("Subscription slot not found or already assigned.");
-      }
-    } else {
-      slot = await this.prisma.orgSubscription.findFirst({
-        where: { organizationId, status: "UNASSIGNED", merchantId: null },
-        orderBy: { createdAt: "asc" },
-      });
-      if (!slot) {
-        throw new BadRequestException("No available subscription slots. Please purchase a plan.");
-      }
-    }
-
-    const unassignedSlot = slot;
-
-    // Atomic update: only update if still UNASSIGNED (race condition guard)
-    const result = await this.prisma.orgSubscription.updateMany({
-      where: { id: unassignedSlot.id, status: "UNASSIGNED", merchantId: null },
-      data: { merchantId, status: "ACTIVE" },
-    });
-
-    if (result.count === 0) {
-      throw new BadRequestException("Slot was already assigned. Please try again.");
-    }
-
-    this.logger.log(`✅ Assigned slot ${unassignedSlot.id} to merchant ${merchantId}`);
-    return { success: true, slotId: unassignedSlot.id, message: "Slot assigned successfully" };
-  }
-
-  async unassignSlot(merchantId: string) {
-    const result = await this.prisma.orgSubscription.updateMany({
-      where: { merchantId, status: "ACTIVE" },
-      data: { merchantId: null, status: "UNASSIGNED" },
-    });
-
-    if (result.count > 0) {
-      this.logger.log(`♻️ Freed ${result.count} slot(s) from merchant ${merchantId}`);
-    }
-
-    return { success: true, freedCount: result.count };
-  }
-
-  async deleteSlot(slotId: string) {
-    try {
+      // 3. Delete the slot
       await this.prisma.orgSubscription.delete({
         where: { id: slotId },
       });
       this.logger.log(`🗑️ Deleted slot ${slotId}`);
       return { success: true, message: "Slot deleted successfully" };
     } catch (error) {
+      if (error instanceof BadRequestException) throw error;
       this.logger.error(`Failed to delete slot ${slotId}:`, error);
       throw new BadRequestException("Failed to delete slot. It may not exist.");
     }
@@ -1181,7 +1287,6 @@ export class RealSubscriptionService {
     return { success: true };
   }
 
-  // ─── SUPER-ADMIN: DIRECT ASSIGN ────────────────────────────
 
   async directAssignSlots(organizationId: string, planId: string, quantity: number) {
     const plan = await this.prisma.subscriptionPlan.findUnique({ where: { id: planId } });
