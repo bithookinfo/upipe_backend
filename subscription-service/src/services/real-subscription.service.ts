@@ -539,7 +539,8 @@ export class RealSubscriptionService {
   }
 
   async commitReservation(organizationId: string, providerCode: string, reservationId: string): Promise<{ success: true }> {
-    const lockKey = `reservation_lock:${organizationId}:${providerCode}`;
+    const pCode = (providerCode || '').toUpperCase();
+    const lockKey = `reservation_lock:${organizationId}:${pCode}`;
     const redis = this.redisService.getClient();
 
     let lockAcquired = false;
@@ -554,7 +555,7 @@ export class RealSubscriptionService {
     if (!lockAcquired) throw new BadRequestException('System busy, please try again');
 
     try {
-      const resKey = `reservations:${organizationId}:${providerCode}`;
+      const resKey = `reservations:${organizationId}:${pCode}`;
       const activeReservationsStr = await redis.get(resKey);
       if (!activeReservationsStr) throw new BadRequestException('Reservation not found or expired');
 
