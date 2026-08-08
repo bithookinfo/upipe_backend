@@ -72,6 +72,7 @@ export class RealSubscriptionService {
               id: true,
               name: true,
               code: true,
+              maxMerchants: true,
               maxTransactions: true,
               providerAccess: {
                 select: {
@@ -125,6 +126,7 @@ export class RealSubscriptionService {
             id: slot.plan.id,
             name: slot.plan.name,
             code: slot.plan.code,
+            maxMerchants: slot.plan.maxMerchants,
             maxTransactions: slot.plan.maxTransactions,
             providerAccess: slot.plan.providerAccess,
           },
@@ -258,7 +260,7 @@ export class RealSubscriptionService {
       slots.forEach((s) => { slotUsageMap[s.id] = 0; });
 
       try {
-        const paymentServiceUrl = process.env.PAYMENT_SERVICE_URL || "http://localhost:4003";
+        const paymentServiceUrl = process.env.PAYMENT_SERVICE_URL;
         const axios = require("axios");
         const tsRes = await axios.get(`${paymentServiceUrl}/orders/organization-timestamps/${organizationId}`, {
           headers: { "x-internal-token": process.env.INTERNAL_TOKEN },
@@ -317,15 +319,43 @@ export class RealSubscriptionService {
 
             for (const s of slots) {
               const pa = s.plan.providerAccess?.find((access: any) => access.providerCode.toUpperCase() === code);
-              if (pa && pa.isIncluded && pa.slotsCount > 0) {
-                const assignedCount = allMerchants.filter(other => {
-                  if (other.orgSubscriptionId !== s.id || other.deletedAt) return false;
-                  const otherProviders = other.providers && Array.isArray(other.providers) && other.providers.length > 0
-                    ? other.providers
-                    : (other.providerType ? [{ providerType: other.providerType }] : []);
-                  return otherProviders.some((op: any) => (op.providerType || '').toUpperCase() === code);
-                }).length;
-                if (assignedCount < pa.slotsCount) {
+              if (pa && pa.isIncluded) {
+                let canAssign = false;
+
+                if (code === 'GPAY') {
+                  if (pa.slotsCount > 0) {
+                    const assignedCount = allMerchants.filter(other => {
+                      if (other.orgSubscriptionId !== s.id || other.deletedAt) return false;
+                      const otherProviders = other.providers && Array.isArray(other.providers) && other.providers.length > 0
+                        ? other.providers
+                        : (other.providerType ? [{ providerType: other.providerType }] : []);
+                      return otherProviders.some((op: any) => (op.providerType || '').toUpperCase() === code);
+                    }).length;
+                    
+                    if (assignedCount < pa.slotsCount) {
+                      canAssign = true;
+                    }
+                  }
+                } else {
+                  // Shared logic for non-GPay
+                  const gpayAccess = s.plan.providerAccess?.find((a: any) => a.providerCode.toUpperCase() === 'GPAY');
+                  const gpaySlots = gpayAccess?.slotsCount || 0;
+                  const sharedLimit = Math.max(0, s.plan.maxMerchants - gpaySlots);
+
+                  const assignedSharedCount = allMerchants.filter(other => {
+                    if (other.orgSubscriptionId !== s.id || other.deletedAt) return false;
+                    const otherProviders = other.providers && Array.isArray(other.providers) && other.providers.length > 0
+                      ? other.providers
+                      : (other.providerType ? [{ providerType: other.providerType }] : []);
+                    return otherProviders.some((op: any) => (op.providerType || '').toUpperCase() !== 'GPAY');
+                  }).length;
+
+                  if (assignedSharedCount < sharedLimit) {
+                    canAssign = true;
+                  }
+                }
+
+                if (canAssign) {
                   m.orgSubscriptionId = s.id; // Assign in memory immediately!
                   try {
                     axios.patch(
@@ -438,14 +468,24 @@ export class RealSubscriptionService {
         }
       });
 
-      // 2. Sum allowed counts by provider
       const allowedCounts: Record<string, number> = {};
+      const includedNonGpayProviders = new Set<string>();
+      let totalGpayAllowed = 0;
+      let totalSharedAllowed = 0;
+
       for (const slot of activeSlots) {
         if (slot.plan?.providerAccess) {
+          const gpayAccess = slot.plan.providerAccess.find((pa: any) => pa.providerCode.toUpperCase() === 'GPAY');
+          const gpaySlots = gpayAccess ? gpayAccess.slotsCount : 0;
+          totalGpayAllowed += gpaySlots;
+          totalSharedAllowed += Math.max(0, slot.plan.maxMerchants - gpaySlots);
+
           for (const pa of slot.plan.providerAccess) {
             if (pa.isIncluded) {
               const code = pa.providerCode.toUpperCase();
-              allowedCounts[code] = (allowedCounts[code] || 0) + (pa.slotsCount || 0);
+              if (code !== 'GPAY') {
+                includedNonGpayProviders.add(code);
+              }
             }
           }
         }
@@ -469,12 +509,35 @@ export class RealSubscriptionService {
       }
 
       // 4. Combine results
-      const entitlements: Record<string, { allowed: number, used: number, remaining: number }> = {};
-      // Include all providers that have an allowed limit
-      for (const [code, allowed] of Object.entries(allowedCounts)) {
-        const used = usedCounts[code] || 0;
-        entitlements[code] = { allowed, used, remaining: Math.max(0, allowed - used) };
+      let totalNonGpayUsed = 0;
+      for (const [code, used] of Object.entries(usedCounts)) {
+        if (code.toUpperCase() !== 'GPAY') {
+          totalNonGpayUsed += used;
+        }
       }
+
+      const entitlements: Record<string, { allowed: number, used: number, remaining: number }> = {};
+      
+      // GPAY
+      const gpayUsed = usedCounts['GPAY'] || 0;
+      entitlements['GPAY'] = {
+        allowed: totalGpayAllowed,
+        used: gpayUsed,
+        remaining: Math.max(0, totalGpayAllowed - gpayUsed)
+      };
+
+      // OTHERS
+      const sharedRemaining = Math.max(0, totalSharedAllowed - totalNonGpayUsed);
+      
+      for (const code of Array.from(includedNonGpayProviders)) {
+        const used = usedCounts[code] || 0;
+        entitlements[code] = {
+          allowed: totalSharedAllowed,
+          used: used,
+          remaining: sharedRemaining
+        };
+      }
+
       // Also include providers that have usage but no allowed limit
       for (const [code, used] of Object.entries(usedCounts)) {
         if (!entitlements[code]) {
@@ -1250,6 +1313,13 @@ export class RealSubscriptionService {
 
     // 1. Try explicit DB config first
     const config = await this.prisma.platformConfig.findUnique({ where: { key } });
+    
+    // If we're not asking for the merchant config, just return the value directly
+    if (key !== 'subscription_payment_merchant') {
+      return config?.value || null;
+    }
+
+    // Only run merchant validation for the merchant config
     if (config?.value && (config.value as any)?.merchantId) {
       const dbMerchantId = (config.value as any).merchantId;
       const isValid = await isMerchantActiveAndValid(dbMerchantId);

@@ -243,7 +243,7 @@ export class GatewayController {
         });
 
         res.status(response.status);
-        const forwardHeaders = ["content-type", "content-length", "cache-control", "connection", "x-accel-buffering", "etag", "last-modified"];
+        const forwardHeaders = ["content-type", "content-length", "cache-control", "connection", "x-accel-buffering", "etag", "last-modified", "accept-ranges", "content-range"];
         forwardHeaders.forEach((name) => {
           const value = response.headers[name];
           if (value) res.setHeader(name, value);

@@ -21,7 +21,8 @@ export type EmailType =
   | "change_email"
   | "usage_alert"
   | "subscription_expiry"
-  | "subscription_renewal";
+  | "subscription_renewal"
+  | "plan_discontinued";
 
 export interface SendEmailPayload {
   to: string;
@@ -186,11 +187,9 @@ export class EmailService {
       ...data,
     };
 
-    if (this.templateStore.isCustomized(type as TemplateKey)) {
-      const custom = this.templateStore.getRendered(type as TemplateKey, base);
-      if (custom?.subject && custom?.html) {
-        return { subject: custom.subject, html: custom.html };
-      }
+    const rendered = this.templateStore.getRendered(type as TemplateKey, base);
+    if (rendered?.subject && rendered?.html) {
+      return { subject: rendered.subject, html: rendered.html };
     }
 
     switch (type) {

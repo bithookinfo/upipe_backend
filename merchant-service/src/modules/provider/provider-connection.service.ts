@@ -1779,19 +1779,44 @@ export class ProviderConnectionService {
 
       for (const sub of subscriptions) {
         const providerAccess = sub.plan.providerAccess?.find((p: any) => p.providerCode.toUpperCase() === providerCode.toUpperCase());
-        if (providerAccess && providerAccess.isIncluded && providerAccess.slotsCount > 0) {
-          const usedCount = await this.prisma.merchantProvider.count({
-            where: {
-              providerType: providerCode.toUpperCase() as any,
-              merchant: {
-                orgSubscriptionId: sub.id,
-                deletedAt: null,
+        if (providerAccess && providerAccess.isIncluded) {
+          if (providerCode.toUpperCase() === 'GPAY') {
+            if (providerAccess.slotsCount > 0) {
+              const usedCount = await this.prisma.merchantProvider.count({
+                where: {
+                  providerType: 'GPAY',
+                  merchant: {
+                    orgSubscriptionId: sub.id,
+                    deletedAt: null,
+                  }
+                }
+              });
+              if (usedCount < providerAccess.slotsCount) {
+                this.logger.log(`✅ Auto-assigned slot ${sub.id} (Plan: ${sub.plan.name}) for ${providerCode}`);
+                return sub.id;
               }
             }
-          });
-          if (usedCount < providerAccess.slotsCount) {
-            this.logger.log(`✅ Auto-assigned slot ${sub.id} (Plan: ${sub.plan.name}) for ${providerCode}`);
-            return sub.id;
+          } else {
+            // For non-GPay providers, check against shared limit
+            const gpayAccess = sub.plan.providerAccess?.find((p: any) => p.providerCode.toUpperCase() === 'GPAY');
+            const gpaySlots = gpayAccess?.slotsCount || 0;
+            const maxMerchants = sub.plan.maxMerchants ?? (gpaySlots + (providerAccess.slotsCount || 1));
+            const sharedLimit = Math.max(providerAccess.slotsCount || 0, maxMerchants - gpaySlots);
+            
+            const usedSharedCount = await this.prisma.merchantProvider.count({
+              where: {
+                providerType: { not: 'GPAY' },
+                merchant: {
+                  orgSubscriptionId: sub.id,
+                  deletedAt: null,
+                }
+              }
+            });
+            
+            if (usedSharedCount < sharedLimit) {
+              this.logger.log(`✅ Auto-assigned slot ${sub.id} (Plan: ${sub.plan.name}) for ${providerCode} (Shared Pool: ${usedSharedCount}/${sharedLimit})`);
+              return sub.id;
+            }
           }
         }
       }

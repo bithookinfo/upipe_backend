@@ -214,11 +214,11 @@ async function main() {
         if (!plan) continue;
 
         const totalMerchants = plan.maxMerchants;
-        const baseSlots = Math.floor(totalMerchants / access.providers.length);
-        let remainder = totalMerchants % access.providers.length;
+        const gpaySlots = Math.max(1, Math.floor(totalMerchants * 0.2));
+        const sharedSlots = Math.max(0, totalMerchants - gpaySlots);
 
-        for (const [index, providerCode] of access.providers.entries()) {
-            const slotsCount = baseSlots + (index < remainder ? 1 : 0);
+        for (const providerCode of access.providers) {
+            const slotsCount = providerCode === 'GPAY' ? gpaySlots : sharedSlots;
 
             await prisma.subscriptionProviderAccess.upsert({
                 where: {
@@ -239,7 +239,7 @@ async function main() {
                 },
             });
         }
-        console.log(`✅ Set provider access for ${access.planCode}: ${access.providers.join(', ')}`);
+        console.log(`✅ Set provider access for ${access.planCode}: GPAY=${gpaySlots}, OTHERS=${sharedSlots} (Total=${totalMerchants})`);
     }
 
     console.log('\n✨ Subscription seed completed successfully!');

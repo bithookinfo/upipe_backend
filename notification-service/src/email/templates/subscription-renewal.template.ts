@@ -16,7 +16,7 @@ export function getSubscriptionRenewalHtml(data: SubscriptionRenewalData): strin
     planName,
     expiryDate,
     supportEmail = process.env.SUPPORT_EMAIL as string,
-    supportPhone = '+91-XXXXXXXXXX',
+    supportPhone = process.env.SUPPORT_PHONE as string || '+91 8055558292',
   } = data;
 
   const headerColor = '#059669'; // Emerald green
@@ -77,8 +77,8 @@ export function getSubscriptionRenewalHtml(data: SubscriptionRenewalData): strin
             <p class="value">${expiryFormatted} IST</p>
           </div>
 
-          <div class="button-container">
-            <a href="${frontendUrl}/dashboard" class="button">Go to Dashboard →</a>
+          <div style="text-align: center;">
+            <a href="${frontendUrl}/dashboard" class="btn" style="color: #ffffff; background-color: #4f46e5; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">Renew Subscription Now</a>
           </div>
 
           <div class="divider"></div>

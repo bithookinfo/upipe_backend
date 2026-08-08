@@ -231,7 +231,7 @@ export class CmsAdminController {
   @Post('media')
   async createMedia(@Body() body: any) {
     if (body.file && typeof body.file === 'string' && body.file.startsWith('data:')) {
-      const matches = body.file.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      const matches = body.file.match(/^data:([^;]+);base64,(.+)$/);
       if (!matches || matches.length !== 3) {
         throw new BadRequestException('Invalid base64 string');
       }

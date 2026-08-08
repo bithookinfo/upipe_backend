@@ -7,7 +7,7 @@ import {
 import { PrismaService } from "../prisma/prisma.service";
 import axios from "axios";
 
-const DEFAULT_UNLOCKED_TYPES = ["PHONEPE", "PAYTM", "SBI", "HDFC", "QUINTUS", "QUINTUSPAY"];
+const DEFAULT_UNLOCKED_TYPES = ["PHONEPE", "PAYTM", "SBI", "HDFC", "QUINTUS", "QUINTUSPAY", "BHARATPE", "GPAY"];
 const PREMIUM_GATEWAY_TYPES = ["BHARATPE", "GPAY"];
 
 @Injectable()
@@ -514,6 +514,11 @@ export class UnlockService {
     const config = await this.prisma.platformConfig.findUnique({
       where: { key },
     });
+    
+    if (key !== 'subscription_payment_merchant') {
+      return config?.value || null;
+    }
+
     if (config?.value && (config.value as any)?.merchantId) {
       const dbMerchantId = (config.value as any).merchantId;
       const isValid = await isMerchantActiveAndValid(dbMerchantId);

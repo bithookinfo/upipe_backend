@@ -47,10 +47,18 @@ export class SubscriptionAssignmentController {
         @Headers('x-is-super-admin') isSuperAdmin?: string
     ) {
         this.validateSuperAdmin(isSuperAdmin, userType);
+        let baseCode = body.code || body.name.toUpperCase().replace(/\s+/g, '_');
+        let code = baseCode;
+        let counter = 1;
+        while (await this.prisma.subscriptionPlan.findUnique({ where: { code } })) {
+            code = `${baseCode}_${counter}`;
+            counter++;
+        }
+
         const plan = await this.prisma.subscriptionPlan.create({
             data: {
                 name: body.name,
-                code: body.code || body.name.toUpperCase().replace(/\s+/g, '_'),
+                code: code,
                 description: body.description || null,
                 price: body.price || 0,
                 billingCycle: body.billingCycle || 'MONTHLY',
@@ -197,6 +205,47 @@ export class SubscriptionAssignmentController {
                 include: { providerAccess: true }
             });
         });
+
+        // Notify organizations if the plan is being discontinued (hidden)
+        if (body.isActive === false && plan.isActive === true) {
+            (async () => {
+                try {
+                    const activeSubscriptions = await this.prisma.orgSubscription.findMany({
+                        where: { planId: id, status: 'ACTIVE' },
+                        select: { organizationId: true },
+                        distinct: ['organizationId']
+                    });
+
+                    const notificationUrl = process.env.NOTIFICATION_SERVICE_URL;
+                    const orgUrl = process.env.ORGANIZATION_SERVICE_URL;
+
+                    for (const sub of activeSubscriptions) {
+                        try {
+                            const orgRes = await axios.get(`${orgUrl}/organizations/${sub.organizationId}`, {
+                                headers: { 'x-user-type': 'SUPER_ADMIN' }
+                            });
+                            const orgData = orgRes.data?.data?.organization || orgRes.data?.data;
+                            if (orgData && orgData.email) {
+                                await axios.post(`${notificationUrl}/internal/send/email`, {
+                                    to: orgData.email,
+                                    type: 'plan_discontinued',
+                                    data: {
+                                        orgName: orgData.name || sub.organizationId,
+                                        planName: updated?.name || plan.name,
+                                    }
+                                }, {
+                                    headers: { 'x-internal-token': process.env.INTERNAL_TOKEN }
+                                });
+                            }
+                        } catch (e) {
+                            console.error(`Failed to send discontinued notice to org ${sub.organizationId}:`, e);
+                        }
+                    }
+                } catch (e) {
+                    console.error('Failed to process plan discontinuation emails:', e);
+                }
+            })();
+        }
 
         return { success: true, data: updated };
     }
@@ -493,5 +542,24 @@ export class SubscriptionAssignmentController {
             organizationId: body.organizationId || null,
         });
         return { success: true, message: 'Payment merchant configuration updated' };
+    }
+
+    @Get('platform-config/instructional-videos')
+    @ApiOperation({ summary: 'Get the instructional videos configuration' })
+    async getInstructionalVideosConfig() {
+        const config = await this.subscriptionService.getPlatformConfig('instructional_videos');
+        return { success: true, data: config || {} };
+    }
+
+    @Put('platform-config/instructional-videos')
+    @ApiOperation({ summary: 'Set/update the instructional videos configuration' })
+    async setInstructionalVideosConfig(
+        @Body() body: any,
+        @Headers('x-user-type') userType?: string,
+        @Headers('x-is-super-admin') isSuperAdmin?: string
+    ) {
+        this.validateSuperAdmin(isSuperAdmin, userType);
+        await this.subscriptionService.setPlatformConfig('instructional_videos', body);
+        return { success: true, message: 'Instructional videos configuration updated' };
     }
 }

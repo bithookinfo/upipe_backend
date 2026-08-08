@@ -159,6 +159,10 @@ export function getResetPasswordHtml(ctx: TemplateContext): string {
   });
 }
 
+export * from './subscription-expiry.template';
+export * from './subscription-renewal.template';
+export * from './plan-discontinued.template';
+
 export function getOrderCompletionHtml(ctx: TemplateContext): string {
   const {
     appName = "Upipe",

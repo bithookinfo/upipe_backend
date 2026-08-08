@@ -10,6 +10,7 @@ export const TEMPLATE_KEYS = [
   "usage_alert",
   "subscription_expiry",
   "subscription_renewal",
+  "plan_discontinued",
 ] as const;
 
 export type TemplateKey = (typeof TEMPLATE_KEYS)[number];
@@ -148,6 +149,36 @@ export const DEFAULT_TEMPLATES: Record<
 </body>
 </html>`,
     variables: ["appName", "orgName", "frontendUrl", "planName", "expiryDate"],
+  },
+  plan_discontinued: {
+    name: "Plan Discontinued Notice",
+    description: "Sent when a user's subscription plan is discontinued.",
+    subject: "Important Update Regarding Your Subscription Plan - {{appName}}",
+    htmlBody: `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; color: #1a1a1a; max-width: 600px; margin: 0 auto; padding: 24px;">
+  <div style="background: linear-gradient(135deg, #4f46e5, #3730a3); padding: 32px 24px; text-align: center; border-radius: 12px 12px 0 0;">
+    <h1 style="margin: 0; color: #ffffff; font-size: 22px; font-weight: 700;">Plan Discontinued Notice</h1>
+    <p style="margin: 8px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Important update for {{orgName}}</p>
+  </div>
+  <div style="padding: 32px 24px; background: #ffffff; border: 1px solid #e4e4e7; border-top: none; border-radius: 0 0 12px 12px;">
+    <p>Hello,</p>
+    <p>We are writing to inform you that your current subscription plan, <strong>{{planName}}</strong>, has been discontinued and is no longer available for renewal on <strong>{{appName}}</strong>.</p>
+    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin: 20px 0;">
+      <p style="font-size: 12px; text-transform: uppercase; color: #71717a; margin: 0 0 4px; font-weight: 600;">What this means for you:</p>
+      <p style="font-size: 15px; color: #0f172a; margin: 0;">Your current active subscription will remain valid until its expiration date. However, once it expires, you will not be able to renew this specific plan.</p>
+    </div>
+    <p>To ensure uninterrupted service for your payment collections, please login to your dashboard and upgrade to one of our new, improved plans before your current subscription expires.</p>
+    <div style="text-align: center; margin: 24px 0;">
+      <a href="{{frontendUrl}}/dashboard" style="display: inline-block; background-color: #4f46e5; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-weight: 600; font-size: 14px;">View Available Plans</a>
+    </div>
+    <p>Best regards,<br>The {{appName}} Team</p>
+  </div>
+  <footer style="margin-top: 32px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #6b7280; text-align: center;">This is an automated message, please do not reply directly to this email.<br>&copy; {{appName}}. All rights reserved.</footer>
+</body>
+</html>`,
+    variables: ["appName", "orgName", "frontendUrl", "planName"],
   },
 };
 

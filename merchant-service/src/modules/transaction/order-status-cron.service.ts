@@ -2144,17 +2144,13 @@ export class OrderStatusCronService {
                 },
               });
 
-              // The orders endpoint returns successAmount = total COMPLETED amount in the range
               const actualAmount = Number(resp.data?.successAmount ?? 0);
-              if (actualAmount <= 0) return; // nothing to update
-
               const storedAmount = Number(cfg.currentDailyAmount ?? 0);
-              // Only update if the payment-service amount is larger than stored
-              // (never shrink — the cron may be mid-run; shrinking could hide in-flight orders)
+
               if (Math.abs(actualAmount - storedAmount) > 0.01) {
                 await this.prisma.merchantConfig.update({
                   where: { merchantId: cfg.merchantId },
-                  data: { currentDailyAmount: actualAmount },
+                  data: { currentDailyAmount: actualAmount, lastDailyReset: new Date() },
                 });
                 this.logger.log(
                   `[DailyUsageReconcile] ✅ ${cfg.merchantId}: ${storedAmount} → ${actualAmount}`,

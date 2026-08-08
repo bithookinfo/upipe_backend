@@ -18,7 +18,7 @@ export function getSubscriptionExpiryHtml(data: SubscriptionExpiryData): string 
     expiryDate,
     hoursRemaining,
     supportEmail = process.env.SUPPORT_EMAIL as string,
-    supportPhone = '+91-XXXXXXXXXX',
+    supportPhone = process.env.SUPPORT_PHONE as string || '+91 8055558292',
   } = data;
 
   const isUrgent = hoursRemaining <= 6;
@@ -91,8 +91,8 @@ export function getSubscriptionExpiryHtml(data: SubscriptionExpiryData): string 
             <p class="value" style="color: ${isUrgent ? '#dc2626' : '#d97706'}">${timeLabel}</p>
           </div>
 
-          <div class="button-container">
-            <a href="${frontendUrl}/subscription" class="button">Renew Subscription →</a>
+          <div style="text-align: center; margin-top: 24px;">
+            <a href="${frontendUrl}/dashboard" class="btn" style="color: #ffffff; background-color: #dc2626; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: 600;">Renew Subscription</a>
           </div>
 
           <div class="divider"></div>

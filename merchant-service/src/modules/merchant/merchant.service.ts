@@ -218,13 +218,39 @@ export class MerchantService {
         orderBy: { createdAt: "desc" },
       });
 
-      const cleanedMerchants = merchants.map((m) => ({
-        ...m,
-        name: this.cleanName(m.name),
-        businessName: m.businessName
-          ? this.cleanName(m.businessName)
-          : m.businessName,
-      }));
+      const now = new Date();
+      const cleanedMerchants = merchants.map((m) => {
+        let config = m.config as any;
+        if (config) {
+          const lastDailyReset = new Date(config.lastDailyReset || m.createdAt);
+          const isNewDay =
+            now.getDate() !== lastDailyReset.getDate() ||
+            now.getMonth() !== lastDailyReset.getMonth() ||
+            now.getFullYear() !== lastDailyReset.getFullYear();
+
+          const lastMonthlyReset = new Date(config.lastMonthlyReset || m.createdAt);
+          const isNewMonth =
+            now.getMonth() !== lastMonthlyReset.getMonth() ||
+            now.getFullYear() !== lastMonthlyReset.getFullYear();
+
+          config = {
+            ...config,
+            currentDailyAmount: isNewDay ? 0 : Number(config.currentDailyAmount || 0),
+            currentDailyTxnCount: isNewDay ? 0 : (config.currentDailyTxnCount || 0),
+            currentMonthlyAmount: isNewMonth ? 0 : Number(config.currentMonthlyAmount || 0),
+            currentMonthlyTxnCount: isNewMonth ? 0 : (config.currentMonthlyTxnCount || 0),
+          };
+        }
+
+        return {
+          ...m,
+          name: this.cleanName(m.name),
+          businessName: m.businessName
+            ? this.cleanName(m.businessName)
+            : m.businessName,
+          config,
+        };
+      });
 
       return {
         success: true,
